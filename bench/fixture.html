@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Stayfinder — hotel search</title>
+<style>
+  body { font: 15px system-ui, sans-serif; margin: 32px; max-width: 760px; }
+  fieldset { border: 1px solid #ccc; padding: 12px 16px; margin: 12px 0; }
+  .hit { padding: 10px 0; border-bottom: 1px solid #eee; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header><h1>Stayfinder</h1><nav><a href="#help">Help</a> · <a href="#deals">Deals</a> · <a href="#account">Account</a></nav></header>
+<main>
+  <form id="search" onsubmit="event.preventDefault(); run()">
+    <label>Destination <input id="city" name="city" placeholder="Where are you going?" autocomplete="off"></label>
+    <label>Guests
+      <select id="guests"><option>1</option><option selected>2</option><option>3</option><option>4</option></select>
+    </label>
+    <fieldset>
+      <legend>Filters</legend>
+      <label><input type="checkbox" id="free"> Free cancellation</label>
+      <label><input type="checkbox" id="breakfast"> Breakfast included</label>
+      <label><input type="checkbox" id="pool"> Pool</label>
+    </fieldset>
+    <button type="submit">Search</button>
+  </form>
+  <p id="status" role="status">Enter a destination to search.</p>
+  <section id="results" hidden></section>
+  <article id="detail" hidden><h2 id="detail-name"></h2><p>Booking page (demo). Nothing is reserved.</p></article>
+</main>
+<script>
+const HOTELS = [
+  { name: 'Casa Flora', city: 'lisbon', free: true, breakfast: true },
+  { name: 'Hotel Tejo', city: 'lisbon', free: false, breakfast: true },
+  { name: 'Alfama Rooms', city: 'lisbon', free: true, breakfast: false },
+  { name: 'Porto Bay', city: 'porto', free: true, breakfast: true },
+]
+function slug(name) { return name.toLowerCase().replace(/ /g, '-') }
+function run() {
+  const city = document.getElementById('city').value.trim().toLowerCase()
+  const free = document.getElementById('free').checked
+  const breakfast = document.getElementById('breakfast').checked
+  const hits = HOTELS.filter(h => h.city === city && (!free || h.free) && (!breakfast || h.breakfast))
+  const results = document.getElementById('results')
+  results.innerHTML = hits.map(h => `<div class="hit"><a href="#hotel-${slug(h.name)}">${h.name}</a>`
+    + ` · ${h.free ? 'Free cancellation' : 'Non-refundable'} · ${h.breakfast ? 'Breakfast' : 'Room only'}</div>`).join('')
+  results.hidden = false
+  document.getElementById('status').textContent = `${hits.length} stays in ${city || 'nowhere'}`
+    + (free ? ' · free cancellation' : '') + (breakfast ? ' · breakfast' : '')
+}
+addEventListener('hashchange', () => {
+  const m = location.hash.match(/^#hotel-(.+)$/)
+  if (!m) return
+  const hotel = HOTELS.find(h => slug(h.name) === m[1])
+  document.getElementById('search').hidden = true
+  document.getElementById('results').hidden = true
+  document.getElementById('detail').hidden = false
+  document.getElementById('detail-name').textContent = hotel ? hotel.name : 'Unknown'
+  document.title = `${hotel ? hotel.name : 'Unknown'} — Stayfinder`
+})
+</script>
+</body>
+</html>
