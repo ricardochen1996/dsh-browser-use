@@ -128,6 +128,32 @@ def test_attach_mode_without_an_endpoint_is_refused_before_any_browser_exists(mo
     assert error["kind"] == "no_browser" and "cdpEndpoint" in error["message"]
 
 
+def test_attach_takes_an_http_endpoint_and_drops_a_ws_url_that_would_outlive_it(monkeypatch):
+    """Only the HTTP endpoint survives a restart: Chrome mints a new ws id every time it starts."""
+    monkeypatch.setenv("BU_CDP_WS", "ws://127.0.0.1:1234/devtools/browser/stale")
+    monkeypatch.delenv("BU_CDP_URL", raising=False)
+    session = bridge.Session(open_browser=pytest.fail, launch=pytest.fail)
+    session._connect({"mode": "attach", "cdpEndpoint": "http://127.0.0.1:9222"})
+    assert bridge.os.environ["BU_CDP_URL"] == "http://127.0.0.1:9222"
+    assert "BU_CDP_WS" not in bridge.os.environ
+
+
+def test_attach_keeps_a_ws_endpoint_and_drops_the_resolving_one(monkeypatch):
+    monkeypatch.setenv("BU_CDP_URL", "http://127.0.0.1:9222")
+    monkeypatch.delenv("BU_CDP_WS", raising=False)
+    session = bridge.Session(open_browser=pytest.fail, launch=pytest.fail)
+    session._connect({"mode": "attach", "cdpEndpoint": "ws://127.0.0.1:9222/devtools/browser/abc"})
+    assert bridge.os.environ["BU_CDP_WS"] == "ws://127.0.0.1:9222/devtools/browser/abc"
+    assert "BU_CDP_URL" not in bridge.os.environ
+
+
+def test_an_endpoint_that_is_not_a_url_is_refused(monkeypatch):
+    monkeypatch.delenv("BU_CDP_WS", raising=False)
+    opened = bridge.Session(open_browser=pytest.fail, launch=pytest.fail)
+    error = failure(opened, "open", url="https://example.test/", mode="attach", cdpEndpoint="127.0.0.1:9222")
+    assert error["kind"] == "bad_request" and "http(s) or ws(s)" in error["message"]
+
+
 def call(session, method, **params):
     response = bridge.dispatch(session, {"id": 1, "method": method, "params": params})
     assert "result" in response, response

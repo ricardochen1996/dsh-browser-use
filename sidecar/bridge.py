@@ -385,9 +385,21 @@ class Session:
     def _connect(self, params):
         """Point Browser Harness at a browser before anything connects to one."""
         sidecar_name()
-        endpoint = params.get("cdpEndpoint") or os.environ.get("BU_CDP_WS")
+        endpoint = (params.get("cdpEndpoint") or os.environ.get("BU_CDP_WS") or "").strip()
         if endpoint:
-            os.environ["BU_CDP_WS"] = endpoint
+            # Browser Harness takes a ws URL verbatim but resolves an HTTP one through /json/version,
+            # and only the HTTP form survives a browser restart: Chrome puts a fresh id in the ws URL
+            # every time it starts. Accept both, the way the MCP providers accept either.
+            if any(character.isspace() for character in endpoint):
+                raise BridgeError("bad_request", "cdpEndpoint must not contain whitespace")
+            if endpoint.startswith(("http://", "https://")):
+                os.environ.pop("BU_CDP_WS", None)
+                os.environ["BU_CDP_URL"] = endpoint
+            elif endpoint.startswith(("ws://", "wss://")):
+                os.environ.pop("BU_CDP_URL", None)
+                os.environ["BU_CDP_WS"] = endpoint
+            else:
+                raise BridgeError("bad_request", "cdpEndpoint must be an http(s) or ws(s) URL")
             return
         if params.get("mode", "launch") != "launch":
             raise BridgeError("no_browser", "mode 'attach' requires a cdpEndpoint")
@@ -396,6 +408,9 @@ class Session:
         env = self._launch(params.get("executablePath"), params.get("userDataDir") or DEFAULT_PROFILE,
                            params.get("port") or free_port(), bool(params.get("headless")))
         self.owned_browser = env.pop("_process")
+        # A launched browser owns its own endpoint: an attach configured by an earlier call must not
+        # keep pointing the connection layer at a browser this Session no longer drives.
+        os.environ.pop("BU_CDP_URL", None)
         os.environ.update(env)
 
     def open(self, params):
