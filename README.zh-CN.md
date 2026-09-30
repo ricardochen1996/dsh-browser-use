@@ -147,7 +147,7 @@ host 半是普通 ESM，Web 半是手写的 `__ModuleLoader__` 脚本，没有 t
 需要 Node.js `^22.19.0 || >=24.0.0`、DSH、Chrome/Chromium、Python 3.12+ 和 `uv`。
 
 ```bash
-dsh plugin --profile desktop add @weichen96/dsh-browser-use@0.1.0
+dsh plugin --profile desktop add @weichen96/dsh-browser-use
 
 # npm 包自带 bridge，但 Python 引擎是独立依赖。
 git clone https://github.com/ricardochen1996/jev-ultrafast.git /absolute/path/to/jev-ultrafast
@@ -162,7 +162,7 @@ uv sync --project /absolute/path/to/jev-ultrafast
     projectPath: /absolute/path/to/jev-ultrafast
 ```
 
-插件会使用该 checkout 的 Python 环境；npm 不会安装 Chrome 或 Python 依赖。安装后可在 DSH 中调用 `browser_doctor` 自检。如果只是安装到 Node 项目而不是 DSH profile，可用 `npm install @weichen96/dsh-browser-use@0.1.0`；这个命令本身不会把插件注册到 DSH。
+插件会使用该 checkout 的 Python 环境；npm 不会安装 Chrome 或 Python 依赖。安装后可在 DSH 中调用 `browser_doctor` 自检。如果只是安装到 Node 项目而不是 DSH profile，可用 `npm install @weichen96/dsh-browser-use`；这个命令本身不会把插件注册到 DSH。需要固定首个版本时，在上述包名后追加 `@0.1.0`。
 
 如果之前安装了未发布的本地 `@rc/dsh-browser-use`，请先移除旧插件条目再安装 npm 包，不要同时启用两个 provider。内部 `id: dsh-browser-use` 和配置字段保持不变。
 
@@ -356,13 +356,15 @@ Problems :
 ## 六、验证（不花一分钱）
 
 ```bash
-npm run check             # 全部：Python 单测 + Node 检查（真浏览器，无模型调用）
-uv run pytest             # 35 项：sidecar 协议契约（离线，含 browser_act intent 的 Jev 选择/文本/拒绝）
+npm run check             # lint、Python 单测、发版元数据 + Node 检查（真浏览器，无模型调用）
+uv run pytest             # sidecar 协议与发版门禁单测（离线）
 uv run python test/check_bridge.py   # 10 项：sidecar 端到端（stdio + 真浏览器）
 uv run python test/check_tabs.py     # 5 项：一次启动只留一个标签页
 node test/plugin.mjs      # 66 项：24 工具与拒绝（真浏览器）+ 3 元素状态渲染 + 4 缺引擎诊断 + 16 引擎配置 + 2 attach 独占 + 3 接你的 Chrome + 11 设置页表单与即时生效 + 3 在途取消
 node test/delegation.mjs  # 45 项：对话只见 browser_task、常驻子 agent 接收后续任务、释放/重启后恢复并重新挂工具、fresh 与丢失替换、一次性委派、取消与回退
 node test/inspector.mjs   # 27 项：Web 端注册 + 配置表单的注册键/字段/写回 + host 路由 + 页面可渲染
+npm run release:check     # 核对 npm/Python/uv.lock 版本与发布元数据
+npm run release:pack      # 检查并独立安装实际 npm 包，输出到 dist/，不会发布
 ```
 
 引擎不在同级目录时：
@@ -446,6 +448,50 @@ DSH host (Node)                                        ← 本仓库 lib/
 
 ```bash
 dsh plugin --profile desktop remove @weichen96/dsh-browser-use
+```
+
+## 十一、CI 与发版
+
+[`ci.yml`](https://github.com/ricardochen1996/dsh-browser-use/blob/main/.github/workflows/ci.yml) 在 PR 和 `main` 分支推送时运行：Ubuntu 24.04、Node 22.19.0 / 24.21.0、Python 3.12，浏览器使用 runner 自带 Chrome。Actions、包管理器版本和外部引擎 commit 均固定；pnpm 和 uv 使用 lockfile 安装。检查包含 lint、单测、真实浏览器集成、npm/Python 版本一致性、测速图再生成一致性，以及实际 npm tarball 的独立安装。不需要任何模型凭据。升级引擎时，应明确更新此 workflow 中的引擎 SHA。
+
+[`release.yml`](https://github.com/ricardochen1996/dsh-browser-use/blob/main/.github/workflows/release.yml) 由附注标签 `vX.Y.Z` 触发，标签 commit 必须已在 `main` 历史中。它重新运行 CI，将 **CI 已验证的同一个 tarball** 发布到 npm，然后创建带自动说明和 tarball 附件的 GitHub Release。当前只支持稳定版本；预发布标签会被拒绝，不会误写 `latest`。重跑时，只有已发布版本与本次包的完整性哈希相同才跳过 npm 发布；同版本不同内容直接失败，新版本也不能把 `latest` 回退。
+
+### 一次性配置 Trusted publishing
+
+在 npm 包的 **Settings → Trusted publishing** 中添加 GitHub Actions publisher：
+
+| 设置 | 值 |
+| --- | --- |
+| Organization or user | `ricardochen1996` |
+| Repository | `dsh-browser-use` |
+| Workflow filename | `release.yml` |
+| Environment | `npm` |
+
+在 GitHub 创建 **`npm` environment**，允许版本标签部署，建议开启 required reviewers 审批。环境名必须与 workflow 和 npm 中的设置一致。只有发布 job 获得 `id-token: write`、`contents: write`，CI 保持只读。npm OIDC 使用短期凭据并生成 provenance，不需要保存 `NPM_TOKEN`。首次自动发版前，这些账号设置需要由 npm 包 / GitHub 仓库管理员完成。
+
+### 发布下一个版本
+
+从干净、已更新的 `main` checkout 开始，确保引擎环境就绪，一起更新三处版本记录：
+
+```bash
+npm version 0.1.1 --no-git-tag-version
+uv version 0.1.1 --no-sync
+npm run check
+npm run test:e2e
+npm run release:pack
+
+git add package.json pyproject.toml uv.lock
+git commit -m "chore(release): v0.1.1"
+git tag -a v0.1.1 -m "v0.1.1"
+git push --atomic origin main v0.1.1
+```
+
+确认 Release workflow 成功后再对外宣布。失败重跑可用 **Re-run jobs**，或 `gh workflow run release.yml --ref v0.1.1`；选择分支而不是标签会被拒绝。不要移动已发布标签，也不要重复使用已发布的版本号。
+
+`v0.1.0` 对应已发布到 npm 的源码，早于这套 workflows。推送该标签**不会**执行新流程，也不要把它移动到 CI commit。推送 `main` 和 `v0.1.0` 后，可单独补建该版本的 GitHub Release，不会重复发布 npm：
+
+```bash
+gh release create v0.1.0 --verify-tag --generate-notes --title v0.1.0
 ```
 
 ---
