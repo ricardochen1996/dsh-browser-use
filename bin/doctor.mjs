@@ -9,10 +9,8 @@
 
 import { inspectEngine, reportText } from '../lib/engine.js'
 
-const projectPath = process.argv[2]
-  ?? process.env.DSH_BROWSER_USE_PROJECT
-  ?? process.env.JEV_ULTRAFAST_PROJECT
-  ?? ''
+// The plugin takes the engine checkout from its configuration only; here the argument stands in for it.
+const projectPath = process.argv[2] ?? ''
 
 const report = await inspectEngine({ projectPath, mode: 'launch' }, { fresh: true })
 console.log(reportText(report, { Project: projectPath || '(unset)' }))
