@@ -471,6 +471,15 @@ In the npm package's **Settings → Trusted publishing**, add a GitHub Actions p
 | Workflow filename | `release.yml` |
 | Environment | `npm` |
 
+The publisher must be allowed to publish. The terminal equivalent needs account 2FA, and `--allow-publish` is off unless passed:
+
+```bash
+npx npm@11.20.0 trust github @weichen96/dsh-browser-use --file release.yml \
+  --repo ricardochen1996/dsh-browser-use --env npm --allow-publish
+```
+
+If no publisher with publish permission matches this workflow, the publish step fails with `E404 Not Found - PUT` and nothing is published. Fix the setting, then use **Re-run failed jobs** on the same run.
+
 In GitHub, create the **`npm` environment** and allow version-tag deployments. Required-reviewer approval is recommended. Keep the publisher's environment name identical to the workflow. The publishing job alone receives `id-token: write` and `contents: write`; CI stays read-only. npm OIDC generates short-lived credentials and provenance, so no `NPM_TOKEN` secret is required. These account settings must be configured by a package/repository administrator before the first automated release.
 
 ### Cut the next version

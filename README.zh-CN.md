@@ -470,6 +470,15 @@ dsh plugin --profile desktop remove @weichen96/dsh-browser-use
 | Workflow filename | `release.yml` |
 | Environment | `npm` |
 
+该 publisher 必须拥有发布（publish）权限。命令行等价写法需要账号已开启 2FA，且 `--allow-publish` 默认关闭，必须显式传入：
+
+```bash
+npx npm@11.20.0 trust github @weichen96/dsh-browser-use --file release.yml \
+  --repo ricardochen1996/dsh-browser-use --env npm --allow-publish
+```
+
+如果没有与该 workflow 匹配且拥有发布权限的 publisher，发布步骤会报 `E404 Not Found - PUT`，且不会发布任何内容。修正设置后，在同一个 run 上点 **Re-run failed jobs** 即可。
+
 在 GitHub 创建 **`npm` environment**，允许版本标签部署，建议开启 required reviewers 审批。环境名必须与 workflow 和 npm 中的设置一致。只有发布 job 获得 `id-token: write`、`contents: write`，CI 保持只读。npm OIDC 使用短期凭据并生成 provenance，不需要保存 `NPM_TOKEN`。首次自动发版前，这些账号设置需要由 npm 包 / GitHub 仓库管理员完成。
 
 ### 发布下一个版本
