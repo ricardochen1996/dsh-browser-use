@@ -164,7 +164,7 @@ uv sync --project /absolute/path/to/jev-ultrafast
     projectPath: /absolute/path/to/jev-ultrafast
 ```
 
-插件会使用该 checkout 的 Python 环境；npm 不会安装 Chrome 或 Python 依赖。安装后可在 DSH 中调用 `browser_doctor` 自检。如果只是安装到 Node 项目而不是 DSH profile，可用 `npm install @weichen96/dsh-browser-use`；这个命令本身不会把插件注册到 DSH。需要固定首个版本时，在上述包名后追加 `@0.1.0`。
+插件会使用该 checkout 的 Python 环境；npm 不会安装 Chrome 或 Python 依赖。安装后可在 DSH 中调用 `browser_doctor` 自检。如果只是安装到 Node 项目而不是 DSH profile，可用 `npm install @weichen96/dsh-browser-use`；这个命令本身不会把插件注册到 DSH。需要固定版本时，在上述包名后追加 `@0.2.0`。
 
 如果之前安装了未发布的本地 `@rc/dsh-browser-use`，请先移除旧插件条目再安装 npm 包，不要同时启用两个 provider。内部 `id: dsh-browser-use` 和配置字段保持不变。
 
@@ -477,19 +477,19 @@ dsh plugin --profile desktop remove @weichen96/dsh-browser-use
 从干净、已更新的 `main` checkout 开始，确保引擎环境就绪，一起更新三处版本记录：
 
 ```bash
-npm version 0.1.1 --no-git-tag-version
-uv version 0.1.1 --no-sync
+npm version 0.2.1 --no-git-tag-version
+uv version 0.2.1 --no-sync
 npm run check
 npm run test:e2e
 npm run release:pack
 
 git add package.json pyproject.toml uv.lock
-git commit -m "chore(release): v0.1.1"
-git tag -a v0.1.1 -m "v0.1.1"
-git push --atomic origin main v0.1.1
+git commit -m "chore(release): v0.2.1"
+git tag -a v0.2.1 -m "v0.2.1"
+git push --atomic origin main v0.2.1
 ```
 
-确认 Release workflow 成功后再对外宣布。失败重跑可用 **Re-run jobs**，或 `gh workflow run release.yml --ref v0.1.1`；选择分支而不是标签会被拒绝。不要移动已发布标签，也不要重复使用已发布的版本号。
+确认 Release workflow 成功后再对外宣布。失败重跑可用 **Re-run jobs**，或 `gh workflow run release.yml --ref v0.2.1`；选择分支而不是标签会被拒绝。不要移动已发布标签，也不要重复使用已发布的版本号。
 
 `v0.1.0` 对应已发布到 npm 的源码，早于这套 workflows。推送该标签**不会**执行新流程，也不要把它移动到 CI commit。推送 `main` 和 `v0.1.0` 后，可单独补建该版本的 GitHub Release，不会重复发布 npm：
 
