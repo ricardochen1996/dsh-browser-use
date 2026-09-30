@@ -50,12 +50,13 @@ dsh-browser-use/
 
 ## 一、它提供什么
 
-**浏览器操作不在主 agent 手里。** 对话里只有两个工具：
+**浏览器操作不在主 agent 手里。** 对话里只有这几个工具（`browser_task_status` 只在常驻子 agent 模式下存在）：
 
 | 工具 | 作用 |
 | --- | --- |
 | `browser_task` | 把一个目标交给本对话的**常驻浏览器子 agent**：第一次调用启动它，之后每次调用都把新任务发给**同一个**子 agent（它记得页面和之前做过什么）。调用立即返回，结论稍后以消息形式回到对话。`fresh: true` 换一个没有记忆的新子 agent |
-| `browser_doctor` | 自检：解释器、引擎版本、浏览器、委派状态、以及每一项缺失的修复命令 |
+| `browser_task_status` | 常驻浏览器子 agent 在干什么：工作中（干了多久、哪个任务、在哪个页面），或空闲（上一轮怎么结束的、收尾消息）。不调它结论也会以消息形式自动送达；`wait: true` 会阻塞到子 agent 完成或给你发消息、或用户发话为止（`timeout_ms` 默认 2 分钟，最多 10 分钟）——只在离了结果就没法往下走时用 |
+| `browser_doctor` | 自检：解释器、引擎版本、浏览器、委派状态（含本对话的子 agent 是否在工作）、以及每一项缺失的修复命令 |
 
 浏览器工具挂在**被委派的子 agent 的 scope** 里（默认 6 个，`browser_goal` 关闭时）。只有它看得见、只有它能调用：
 
@@ -73,7 +74,8 @@ dsh-browser-use/
 
 - **派新任务**：再调一次 `browser_task`，任务作为消息送进同一个子 agent 的会话；它正在忙就在下一步边界插入，空闲就直接开工，已被释放就从持久化里冷启动恢复（浏览器工具自动重新挂上）。
 - **双向通信**：子 agent 只额外放开了全局的 `send_message`，可以随时给主 agent 发进度、提问、交结果；主 agent 用 `send_message` 给它补充/纠正当前任务，用 `interrupt_agent` 叫停。
-- **结果自动回来**：子 agent 干完会把结论发回来；它空闲下来时 DSH 还会给主 agent 发一条"Background subagent … finished"的通知并唤醒它，不用轮询。
+- **结果自动回来**：子 agent 干完会把结论发回来；它空闲下来时 DSH 还会给主 agent 发一条"Background subagent … finished"的通知并唤醒它，不用轮询。`browser_task` 的回执会把这点说清楚——继续干别的或结束本轮，不要在 shell 里 `sleep`；组合里有 agent team 时还会注明它的 `wait_agent` / `list_agents` 看不到这个子 agent。
+- **随时查状态**：`browser_task_status` 从宿主自己的 `subagent/start` / `subagent/end` 事件和 agent 注册表读出子 agent 的状态。`wait: true` 等的是通知所依据的同一次结算，而不是靠 `sleep` 去猜；用户发话或子 agent 给主 agent 发消息时会提前返回。
 - **重启也找得回**：子 agent 用标签 `browser-task` 记在父会话的目录里，DSH 重启或 resume 后，下一次 `browser_task` / `send_message` 会找回同一个子 agent。
 
 provider 不支持 continuable（或配置 `delegateMode: one-shot`）时，退回**一次性委派**：每个任务一个子 agent，`browser_task` 等它回报后再返回。
@@ -361,7 +363,7 @@ uv run pytest             # sidecar 协议与发版门禁单测（离线）
 uv run python test/check_bridge.py   # 10 项：sidecar 端到端（stdio + 真浏览器）
 uv run python test/check_tabs.py     # 5 项：一次启动只留一个标签页
 node test/plugin.mjs      # 66 项：24 工具与拒绝（真浏览器）+ 3 元素状态渲染 + 4 缺引擎诊断 + 16 引擎配置 + 2 attach 独占 + 3 接你的 Chrome + 11 设置页表单与即时生效 + 3 在途取消
-node test/delegation.mjs  # 45 项：对话只见 browser_task、常驻子 agent 接收后续任务、释放/重启后恢复并重新挂工具、fresh 与丢失替换、一次性委派、取消与回退
+node test/delegation.mjs  # 70 项：对话只见 browser_task(+_status)、常驻子 agent 接收后续任务、释放/重启后恢复并重新挂工具、状态与等待（结算、超时、用户发话、子 agent 来信、取消、静默退出）、fresh 与丢失替换、一次性委派、取消与回退
 node test/inspector.mjs   # 27 项：Web 端注册 + 配置表单的注册键/字段/写回 + host 路由 + 页面可渲染
 npm run release:check     # 核对 npm/Python/uv.lock 版本与发布元数据
 npm run release:pack      # 检查并独立安装实际 npm 包，输出到 dist/，不会发布
@@ -395,7 +397,7 @@ npm 上未 scoped 的 `dsh-browser-use` 属于**另一个项目**（Browser Use 
 | 附加浏览器独占 | 该 provider 实例内一次只留给一个 live Session，第二个被明确拒绝（另有 2 项检查） |
 | 取消是启动前后统一的通道 | 请求级 `AbortSignal`：在途请求立即结算（kind `cancelled`），委派与 `run.dispose()` 一起收尾；**已交付给浏览器的操作不回滚** |
 | 清理失败不重用 | 关闭失败的代次被标记为不可用：下一次打开换新进程 + 新 daemon 名，并把原因写进工具结果 |
-| 子 agent 生命周期归宿主 | 用 `ctx.subagents.startContinuable()` / `sendMessage()`（一次性模式用 `start()`）启动和续派，不自己造 Agent；`toolFilter` / 子 agent scope / 结束通知都用宿主机制 |
+| 子 agent 生命周期归宿主 | 用 `ctx.subagents.startContinuable()` / `sendMessage()`（一次性模式用 `start()`）启动和续派，不自己造 Agent；`toolFilter` / 子 agent scope / 结束通知都用宿主机制，`browser_task_status` 读的也是宿主的 `subagent/start` / `subagent/end` 事件，不自己计时猜测 |
 | 工具不污染其它 agent | 浏览器工具注册在子 agent 的 scope（不是全局），子 agent 又被 `restrict({ allow: ['send_message'] })`（一次性模式 `allow: []`）屏蔽掉其它全局工具 |
 
 ### 内部标识仍是 `dsh-browser-use`
@@ -412,10 +414,11 @@ npm 上未 scoped 的 `dsh-browser-use` 属于**另一个项目**（Browser Use 
 
 ```text
 DSH host (Node)                                        ← 本仓库 lib/
-  dsh-browser-use ── ctx.tools.register(browser_task, browser_doctor)     对话只看见这两个
+  dsh-browser-use ── ctx.tools.register(browser_task, browser_task_status, browser_doctor)   对话只看见这几个
                   ── ctx.subagents.startContinuable / sendMessage('spawn') 常驻子 agent，后续任务发给它
                   │     └─ 子 agent 的 scope：browser_* 只注册在这里
                   │        子 agent 只放开 send_message，其它全局工具被屏蔽
+                  ── ctx.on(subagent/start, subagent/end, agent/inbox/inserted)   子 agent 的状态，供 browser_task_status 读
                   ── ctx.systemPrompt.section(子 agent 的使用规则)
                   ── ctx.webServer.register('/browser-use')     面板路由
                   └─ 每 Session 一个 sidecar 进程，操作串行（委派之间复用）

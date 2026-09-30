@@ -50,12 +50,13 @@ The engine (`jev_ultrafast`) is **a separate repository**; this project only dep
 
 ## 1. What it provides
 
-**Browser operations are not in the main agent's hands.** The conversation sees only two tools:
+**Browser operations are not in the main agent's hands.** The conversation sees only these tools (`browser_task_status` exists only with a persistent subagent):
 
 | Tool | Job |
 | --- | --- |
 | `browser_task` | Hand a goal to this conversation's **persistent browser subagent**: the first call starts it, and every later call sends the new task to the **same** subagent (it remembers the page and what it did before). The call returns immediately; the conclusion comes back later as a message. `fresh: true` swaps in a new subagent with no memory. |
-| `browser_doctor` | Self-check: interpreter, engine version, browser, delegation status, and a fix command for each missing piece. |
+| `browser_task_status` | What the persistent browser subagent is doing: working (for how long, on which task, on which page) or idle (how its last run ended, its closing message). The conclusion arrives as a message without calling it; `wait: true` blocks until the subagent finishes or messages you, or the user writes (`timeout_ms`, default 2 min, at most 10 min) — only for a step that cannot go on without the result. |
+| `browser_doctor` | Self-check: interpreter, engine version, browser, delegation status (including whether this conversation's subagent is working), and a fix command for each missing piece. |
 
 The browser tools live in the **delegated subagent's scope** (6 by default, with `browser_goal` off). Only it can see and call them:
 
@@ -73,7 +74,8 @@ The browser tools live in the **delegated subagent's scope** (6 by default, with
 
 - **New task**: call `browser_task` again — the task is delivered as a message into the same subagent's conversation; if it is busy it is admitted at the next step boundary, if idle it starts right away, and if it was released it cold-starts from persistence (browser tools re-attach automatically).
 - **Two-way messaging**: the subagent is granted only the global `send_message`, so it can send you progress, questions and results at any time; you use `send_message` to add to or correct the current task, and `interrupt_agent` to stop it.
-- **Results come back on their own**: the subagent sends its conclusion back; when it goes idle DSH also sends the main agent a "Background subagent … finished" notification and wakes it, so no polling.
+- **Results come back on their own**: the subagent sends its conclusion back; when it goes idle DSH also sends the main agent a "Background subagent … finished" notification and wakes it, so no polling. The `browser_task` receipt says so explicitly — keep working or end the turn, never `sleep` in a shell — and, where an agent team is present, that its `wait_agent` / `list_agents` do not see this subagent.
+- **Status on request**: `browser_task_status` reads the subagent's state from the host's own `subagent/start` / `subagent/end` events and the agent registry. With `wait: true` it blocks on the same settlement the notification rides on, instead of guessing with `sleep`, and returns early when the user writes or the subagent messages the main agent.
 - **Survives restarts**: the subagent is recorded under the tag `browser-task` in the parent session's directory, so after a DSH restart or resume the next `browser_task` / `send_message` finds the same subagent.
 
 When the provider doesn't support continuable subagents (or `delegateMode: one-shot` is set), it falls back to **one-shot delegation**: one subagent per task, and `browser_task` returns after it reports back.
@@ -361,7 +363,7 @@ uv run pytest             # offline sidecar protocol and release-gate tests
 uv run python test/check_bridge.py   # 10: sidecar end-to-end (stdio + real browser)
 uv run python test/check_tabs.py     # 5: a launch leaves exactly one tab
 node test/plugin.mjs      # 66: 24 tools & refusals (real browser) + 3 element-state rendering + 4 missing-engine diagnostics + 16 engine config + 2 attach exclusivity + 3 attach-to-your-Chrome + 11 settings form & immediate effect + 3 in-flight cancel
-node test/delegation.mjs  # 45: conversation sees only browser_task, persistent subagent takes later tasks, restores & re-mounts tools after release/restart, fresh & lost replacement, one-shot delegation, cancel & fallback
+node test/delegation.mjs  # 70: conversation sees only browser_task(+_status), persistent subagent takes later tasks, restores & re-mounts tools after release/restart, status & wait (settle, timeout, user, subagent message, cancel, silent exit), fresh & lost replacement, one-shot delegation, cancel & fallback
 node test/inspector.mjs   # 27: web-half registration + config form registration keys/fields/write-back + host routing + page renders
 npm run release:check     # npm/Python/uv.lock version and publishing metadata agreement
 npm run release:pack      # inspect and install the exact npm tarball; writes dist/ (no publishing)
@@ -395,7 +397,7 @@ Those upstream 63 lines only define **the slot, the name and ownership**; the co
 | Attach browser exclusivity | held by one live Session at a time within this provider instance; a second is explicitly refused (2 more checks) |
 | Cancellation is one channel before and after launch | request-level `AbortSignal`: in-flight requests settle immediately (kind `cancelled`), delegation winds down with `run.dispose()`; **operations already delivered to the browser are not rolled back** |
 | No reuse after a failed cleanup | a generation that failed to close is marked unusable: the next open uses a new process + new daemon name and writes the reason into the tool result |
-| Subagent lifecycle belongs to the host | started and continued with `ctx.subagents.startContinuable()` / `sendMessage()` (`start()` in one-shot mode), never building an Agent by hand; `toolFilter` / subagent scope / finish notifications all use host mechanisms |
+| Subagent lifecycle belongs to the host | started and continued with `ctx.subagents.startContinuable()` / `sendMessage()` (`start()` in one-shot mode), never building an Agent by hand; `toolFilter` / subagent scope / finish notifications all use host mechanisms, and `browser_task_status` reads the host's `subagent/start` / `subagent/end` events rather than keeping its own clock |
 | Tools don't pollute other agents | browser tools are registered in the subagent's scope (not global), and the subagent is `restrict({ allow: ['send_message'] })` (`allow: []` in one-shot mode) to block other global tools |
 
 ### The internal identifier is still `dsh-browser-use`
@@ -412,10 +414,11 @@ Only the **package name** changed. These are stable anchors for config and UI an
 
 ```text
 DSH host (Node)                                        ← this repo's lib/
-  dsh-browser-use ── ctx.tools.register(browser_task, browser_doctor)     the conversation sees only these two
+  dsh-browser-use ── ctx.tools.register(browser_task, browser_task_status, browser_doctor)   the conversation sees only these
                   ── ctx.subagents.startContinuable / sendMessage('spawn') persistent subagent, later tasks go to it
                   │     └─ the subagent's scope: browser_* is registered only here
                   │        the subagent gets only send_message; other global tools are blocked
+                  ── ctx.on(subagent/start, subagent/end, agent/inbox/inserted)   the subagent's state, for browser_task_status
                   ── ctx.systemPrompt.section(subagent usage rules)
                   ── ctx.webServer.register('/browser-use')     panel route
                   └─ one sidecar process per Session, serialized operations (reused across delegations)

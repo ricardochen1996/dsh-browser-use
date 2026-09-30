@@ -99,7 +99,18 @@ function fakeHost({ capabilities = { toolFilter: true }, late = false, continuab
   const emit = async (event, payload) => {
     for (const handler of listeners.get(event) ?? []) await handler(payload)
   }
+  /** Events DSH publishes synchronously, from inside a step that must not be split. */
+  const emitNow = (event, payload) => {
+    for (const handler of listeners.get(event) ?? []) handler(payload)
+  }
   const failure = (message, code) => Object.assign(new Error(message), { code })
+  /** What a continuation manager publishes when a child's Activation becomes resident. */
+  const lifecycle = record => ({ runId: `run-${record.id}-${record.messages.length + 1}`, provider: 'spawn', id: record.id, local: true })
+  /** Put one message in an Agent's inbox, the way DSH announces it. */
+  const deliver = (agent, text, source) => emitNow('agent/inbox/inserted', {
+    agent,
+    message: { role: 'user', content: [{ type: 'text', text }], source },
+  })
 
   /** A continuable child the host already persisted, with no live Agent: what a restarted process finds. */
   const seedChild = (parentId, label) => {
@@ -110,13 +121,36 @@ function fakeHost({ capabilities = { toolFilter: true }, late = false, continuab
     catalogs.get(parentId).push({ id, mode: 'continuable', label, createdAt: Date.now() })
     return record
   }
-  /** The continuation manager disposes a child's handle once it goes idle: its scope goes with it. */
-  const settle = record => {
+  /**
+   * The continuation manager disposes a child's handle once it goes idle: its scope goes with it.
+   * Then, in one synchronous step, it tells the parent (the settlement notice) and publishes
+   * `subagent/end` — unless `notify` is false, which is a child that vanished without either.
+   */
+  const settle = (record, { stopReason = 'completed', text, notify = true } = {}) => {
     scopes.get(record.id)?.clear()
     restrictions.set(record.id, [])
     agents.delete(record.id)
     record.child = undefined
+    if (!notify) return
+    const parent = agents.get(record.parentId)
+    if (parent !== undefined) {
+      const summary = `Background subagent ${record.id} finished and will do no further work unless you send it more.`
+      deliver(parent, `${summary}\n\n${text === undefined ? 'It left no closing message.' : `Its closing message:\n${text}`}`, {
+        kind: 'subagent-settled', form: 'notice', summary, senderSessionId: record.id,
+      })
+    }
+    emitNow('subagent/end', {
+      ...lifecycle(record),
+      stopReason,
+      ...(text === undefined ? {} : { lastAssistantMessage: [{ type: 'text', text }] }),
+    })
   }
+  /** The user types into the conversation. */
+  const userWrites = text => deliver(conversation, text, { kind: 'user' })
+  /** A child uses `send_message` to its parent. */
+  const relay = (record, text) => deliver(agents.get(record.parentId), text, {
+    kind: 'agent-message', form: 'relay', senderSessionId: record.id,
+  })
 
   const provider = {
     name: 'spawn',
@@ -164,6 +198,7 @@ function fakeHost({ capabilities = { toolFilter: true }, late = false, continuab
             record.request = spec.request
             record.child = makeAgent(record.id, { parentSession: spec.request.parent.id, origin: 'subagent', isSeeded: false })
             await emit('agent/created', { agent: record.child, source: 'startup' })
+            await emit('subagent/start', lifecycle(record))
             record.messages.push(spec.request.prompt)
             return { childId: record.id, messageId: `m-${record.id}-1` }
           },
@@ -176,6 +211,7 @@ function fakeHost({ capabilities = { toolFilter: true }, late = false, continuab
               // An absent child cold-resumes from persistence before it takes the message.
               record.child = makeAgent(record.id, { parentSession: record.parentId, origin: 'subagent', isSeeded: false })
               await emit('agent/created', { agent: record.child, source: 'resume' })
+              await emit('subagent/start', lifecycle(record))
             }
             record.messages.push(content)
             return `m-${record.id}-${record.messages.length}`
@@ -229,7 +265,7 @@ function fakeHost({ capabilities = { toolFilter: true }, late = false, continuab
   const own = () => [...globals.values()].filter(item => item.external !== true).map(item => item.name).sort().join(',')
   return {
     ctx, conversation, globals, scopes, restrictions, sections, delegations, children, interrupted, warnings,
-    dispose, provide, unprovide, settle, seedChild, subagents, own,
+    dispose, provide, unprovide, settle, seedChild, subagents, own, userWrites, relay,
   }
 }
 
@@ -254,27 +290,46 @@ async function persistentChecks(plugin) {
 
   const ask = (args, signal = new AbortController().signal) =>
     host.globals.get('browser_task').execute(args, { agent: host.conversation, signal })
+  const status = (args = {}, signal = new AbortController().signal) =>
+    host.globals.get('browser_task_status').execute(args, { agent: host.conversation, signal })
   const childCall = (record, name, args) =>
     record.tools().get(name).execute(args ?? {}, { agent: record.child, signal: new AbortController().signal })
 
   try {
-    check(host.own() === 'browser_doctor,browser_task', `the conversation holds ${host.own()}`)
+    check(host.own() === 'browser_doctor,browser_task,browser_task_status', `the conversation holds ${host.own()}`)
     check(!host.globals.has('browser_open') && !host.globals.has('browser_act'),
       'no browser tool is registered for every agent')
     check(host.globals.get('browser_task').parameters.properties.fresh?.type === 'boolean',
       'browser_task can ask for a fresh subagent')
-    check(host.sections.some(item => item.scope === 'global' && item.text.includes('persistent browser subagent')),
+    const statusParameters = host.globals.get('browser_task_status').parameters.properties
+    check(statusParameters.wait?.type === 'boolean' && statusParameters.timeout_ms?.type === 'number',
+      'browser_task_status can report at once or wait with a timeout')
+    const guidance = host.sections.find(item => item.scope === 'global' && item.name === 'dsh-browser-use')?.text ?? ''
+    check(guidance.includes('persistent browser subagent'),
       'the conversation is told the browser subagent persists and reports by message')
+    check(guidance.includes('You are notified when it finishes') && guidance.includes('never sleep')
+      && guidance.includes('browser_task_status'),
+      'the conversation is told it is notified, must not sleep, and can check with browser_task_status')
+    check((await status()).text.includes('No browser subagent works for this conversation yet'),
+      'browser_task_status before the first task says there is no subagent yet')
 
-    // First task: the subagent is started, and the call returns without waiting for its work.
+    // First task: the subagent is started, and the call returns without waiting for its work. An
+    // agent team in the same conversation has its own wait tools, which never see this subagent.
+    host.globals.set('wait_agent', { name: 'wait_agent', external: true })
     phase('first task starts the persistent subagent')
     const first = await ask({ instruction: 'Open the page and type Lisbon into Destination.', url: FIXTURE })
+    host.globals.delete('wait_agent')
     check(host.children.length === 1, 'the first task starts one continuable child')
     const record = host.children[0]
     check(first.text.includes('Started') && first.text.includes(record.id),
       'browser_task returns at once and names the subagent')
+    check(first.text.includes('You are notified when it finishes') && first.text.includes('Do not sleep')
+      && first.text.includes('browser_task_status') && !first.text.includes('wait for it'),
+      'the receipt says the result is announced, not to sleep, and how to check — never "wait for it"')
+    check(first.text.includes('Agent-team tools (wait_agent) do not see this subagent'),
+      'the receipt says the agent-team wait tools do not track the browser subagent')
     check(record.label === 'browser-task', 'the child carries the browser label the plugin finds it by')
-    check(host.own() === 'browser_doctor,browser_task', 'the conversation still holds no browser tool')
+    check(host.own() === 'browser_doctor,browser_task,browser_task_status', 'the conversation still holds no browser tool')
     check([...record.tools().keys()].sort().join(',') === BROWSER_TOOLS, `the child holds ${[...record.tools().keys()].join(', ')}`)
     check(JSON.stringify(record.request.toolFilter) === '{"allow":["send_message"]}'
       && JSON.stringify(host.restrictions.get(record.id)) === '[{"allow":["send_message"]}]',
@@ -286,34 +341,86 @@ async function persistentChecks(plugin) {
     check(!host.sections.some(item => item.scope === 'global' && item.name.startsWith('dsh-browser-use:browser')),
       'the conversation does not get the child guidance')
 
+    phase('status while the subagent works')
+    const working = (await status()).text
+    check(working.includes(`browser subagent "${record.id}" is working`) && working.includes('Open the page and type Lisbon'),
+      'browser_task_status reports the subagent working, and on which task')
+    check(working.includes('has not read a page yet') && working.includes('do not sleep or poll'),
+      'it says the browser has no page yet, and that the result is announced rather than polled for')
+
     phase('child opens the page')
     const opened = await childCall(record, 'browser_open', { url: FIXTURE })
     const target = opened.text.match(/\[(\d+)\][^\n]*searchbox Destination/u)?.[1]
     check(target !== undefined, 'the child reads an indexed action space from the real browser')
     const typed = await childCall(record, 'browser_act', { observation: opened.observation, operation: 'TYPE_TEXT', target, text: 'Lisbon' })
     check(typed.text.includes('· "Lisbon"'), 'the child acts on the page')
+    check((await status()).text.includes('fixture.html') && (await status()).text.includes('last action'),
+      'browser_task_status shows the page the subagent\'s browser is on')
 
     // The child finishes its turn and settles; its handle is disposed, its conversation is not.
-    host.settle(record)
+    phase('a wait ends when the subagent finishes')
+    const waiting = status({ wait: true, timeout_ms: 60000 })
+    await wait(50)
+    const settledAt = Date.now()
+    host.settle(record, { text: 'Destination now reads Lisbon.' })
     check(record.tools().size === 0, 'a settled child holds no live tools')
+    const finished = (await waiting).text
+    check(Date.now() - settledAt < 1000, `a wait returns as soon as the subagent settles (${Date.now() - settledAt}ms)`)
+    check(finished.includes(`browser subagent "${record.id}" finished`) && finished.includes('follows this result'),
+      'the wait says the subagent finished and that its report follows as a message')
+
+    phase('status of an idle subagent')
+    const idle = (await status()).text
+    check(idle.includes('is idle') && idle.includes('completed') && idle.includes('Destination now reads Lisbon.'),
+      'browser_task_status reports an idle subagent, how its last run ended, and its closing message')
+    check((await status({ wait: true })).text.startsWith('Nothing to wait for'),
+      'waiting on an idle subagent returns at once')
 
     phase('second task goes to the same subagent')
     const second = await ask({ instruction: 'Read the page again and report the destination field.' })
     check(host.children.length === 1, 'a second task does not start another child')
     check(second.text.includes('Handed') && second.text.includes(record.id), 'the second task is handed to the same subagent')
+    check(!second.text.includes('Agent-team tools'), 'the receipt names agent-team tools only where they exist')
     check(record.messages.length === 2 && textOf(record.messages[1]).includes('New browser task'),
       'the second task arrives as a message in the child conversation')
     check([...record.tools().keys()].sort().join(',') === BROWSER_TOOLS
       && JSON.stringify(host.restrictions.get(record.id)) === '[{"allow":["send_message"]}]',
       'a resumed child gets its browser tools back')
+    check((await status()).text.includes('Read the page again'), 'browser_task_status follows the resumed subagent to its new task')
     phase('resumed child reads the page again')
     const page = await childCall(record, 'browser_page', {})
     check(page.text.includes('· "Lisbon"'), 'the resumed child drives the same browser, on the page it left')
+
+    phase('a wait that times out, one the user ends, one the subagent ends by writing, one cancelled')
+    const timedOut = (await status({ wait: true, timeout_ms: 1 })).text
+    // Clamped up to the 1s floor; a busy runner may round a late timer to 2s, but never down to 0s.
+    check(/Waited [12]s/.test(timedOut) && timedOut.includes('still working'),
+      'a wait clamped to its shortest timeout returns with the subagent still working')
+    const userWait = status({ wait: true })
+    await wait(50)
+    host.userWrites('Also check the dates.')
+    const byUser = (await userWait).text
+    check(byUser.includes('the user sent a message') && byUser.includes('still working'),
+      'a message from the user ends the wait')
+    const messageWait = status({ wait: true })
+    await wait(50)
+    host.relay(record, 'Question: which dates?')
+    const byMessage = (await messageWait).text
+    check(byMessage.includes('sent you a message') && byMessage.includes('still working'),
+      'a message from the subagent ends the wait')
+    const controller = new AbortController()
+    const cancelledWait = status({ wait: true }, controller.signal)
+    await wait(50)
+    controller.abort()
+    let cancelled
+    try { await cancelledWait } catch (error) { cancelled = error }
+    check(cancelled !== undefined, 'a cancelled wait settles the tool call instead of hanging')
 
     phase('doctor')
     const doctor = await host.globals.get('browser_doctor').execute({}, { agent: host.conversation, signal: new AbortController().signal })
     check(/Delegation\s*:\s*on: persistent/.test(doctor.text) && doctor.text.includes(record.id),
       'the doctor reports the persistent subagent of this conversation')
+    check(doctor.text.includes(`${record.id}, working for`), 'the doctor says whether that subagent is working')
 
     phase('fresh subagent')
     const fresh = await ask({ instruction: 'Start over.', fresh: true })
@@ -323,6 +430,17 @@ async function persistentChecks(plugin) {
     const afterFresh = await ask({ instruction: 'Continue.' })
     check(afterFresh.text.includes(host.children[1].id) && host.children[1].messages.length === 2,
       'later tasks go to the new subagent')
+    check((await status()).text.includes(`browser subagent "${host.children[1].id}" is working`),
+      'browser_task_status reports the new subagent')
+
+    // A child that leaves without a notice or an end edge still ends a wait: its liveness is read too.
+    phase('a wait outlives a subagent that vanishes silently')
+    const silentWait = status({ wait: true })
+    await wait(50)
+    host.settle(host.children[1], { notify: false })
+    const vanished = (await silentWait).text
+    check(vanished.includes('finished') && vanished.includes('arrives as a message'),
+      'a wait ends when the subagent is gone even if no settlement edge arrived')
 
     phase('lost subagent')
     host.children[1].gone = true
@@ -345,17 +463,31 @@ async function restartChecks(plugin) {
   const seeded = host.seedChild(host.conversation.id, 'browser-task')
   const other = host.seedChild(host.conversation.id, 'code-review')
   plugin.apply(host.ctx, { projectPath: ENGINE })
+  const status = args => host.globals.get('browser_task_status').execute(args ?? {}, {
+    agent: host.conversation,
+    signal: new AbortController().signal,
+  })
+
+  phase('restart: status from the catalog')
+  const found = (await status()).text
+  check(found.includes(`browser subagent "${seeded.id}" is idle`),
+    'browser_task_status after a restart finds the subagent in the catalog and reports it idle')
 
   phase('restart: resumed by send_message')
   await host.subagents.sendMessage(host.conversation, seeded.id, [{ type: 'text', text: 'Anything new?' }], { signal: new AbortController().signal })
   check([...seeded.tools().keys()].sort().join(',') === BROWSER_TOOLS,
     'a browser subagent resumed by send_message after a restart gets its browser tools')
+  check((await status()).text.includes(`browser subagent "${seeded.id}" is working`),
+    'a subagent resumed by send_message after a restart reports working')
   await host.subagents.sendMessage(host.conversation, other.id, [{ type: 'text', text: 'Hi' }], { signal: new AbortController().signal })
   check(other.tools().size === 0 && host.restrictions.get(other.id).length === 0,
     'a different subagent of the same conversation is left alone')
 
   phase('restart: browser_task')
   host.settle(seeded)
+  const settled = (await status()).text
+  check(settled.includes('is idle') && settled.includes('Its last run ended') && settled.includes('completed'),
+    'a restarted plugin follows the resumed subagent through its settlement')
   const text = (await host.globals.get('browser_task').execute({ instruction: 'Next.' }, {
     agent: host.conversation,
     signal: new AbortController().signal,
@@ -375,6 +507,8 @@ async function oneShotChecks(plugin) {
 
   check(host.globals.get('browser_task').parameters.properties.fresh === undefined,
     'a one-shot browser_task has no fresh option')
+  check(!host.globals.has('browser_task_status'),
+    'a one-shot browser_task answers with the report itself, so there is no status tool')
   phase('one-shot delegation')
   const pending = ask({ instruction: 'Read the title.' })
   const first = await waitForChild(host, 0)
@@ -437,10 +571,10 @@ async function main() {
   check(late.globals.has('browser_open') && !late.globals.has('browser_task'),
     'a composition without the subagent service starts in direct mode')
   await late.provide()
-  check(late.globals.has('browser_task') && !late.globals.has('browser_open'),
+  check(late.globals.has('browser_task') && late.globals.has('browser_task_status') && !late.globals.has('browser_open'),
     'a provider that appears later turns delegation on and takes the browser tools away')
   await late.unprovide()
-  check(late.globals.has('browser_open') && !late.globals.has('browser_task'),
+  check(late.globals.has('browser_open') && !late.globals.has('browser_task') && !late.globals.has('browser_task_status'),
     'a provider that goes away falls back to the browser tools')
   await late.dispose()
 
