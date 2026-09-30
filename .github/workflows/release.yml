@@ -1,0 +1,139 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Validate release tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require an annotated tag on main
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" != tag || "$GITHUB_REF_NAME" != v* ]]; then
+            echo "Run this workflow on a version tag, not a branch." >&2
+            exit 1
+          fi
+          test "$(git cat-file -t "$GITHUB_REF")" = tag
+          git merge-base --is-ancestor HEAD origin/main
+
+  check:
+    needs: tag
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: Publish verified artifact
+    needs: check
+    if: github.repository == 'ricardochen1996/dsh-browser-use'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: npm
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.21.0'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: npm-package
+          path: dist
+      - name: Install OIDC-capable npm
+        run: npm install --global npm@11.20.0
+
+      - name: Verify artifact and publish with npm OIDC
+        id: npm
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict'
+          import { createHash } from 'node:crypto'
+          import { execFileSync } from 'node:child_process'
+          import { appendFileSync, readFileSync } from 'node:fs'
+          import { basename } from 'node:path'
+          import { setTimeout } from 'node:timers/promises'
+
+          const manifest = JSON.parse(readFileSync('package.json', 'utf8'))
+          const packed = JSON.parse(readFileSync('dist/pack.json', 'utf8'))
+          assert.equal(packed.name, manifest.name)
+          assert.equal(packed.version, manifest.version)
+          assert.equal(process.env.GITHUB_REF_NAME, `v${packed.version}`)
+          assert.equal(basename(packed.filename), packed.filename)
+          const tarball = `dist/${packed.filename}`
+          const integrity = `sha512-${createHash('sha512').update(readFileSync(tarball)).digest('base64')}`
+          assert.equal(integrity, packed.integrity, 'The downloaded artifact was modified.')
+          const base = `https://registry.npmjs.org/${packed.name}`
+          async function versionInfo(version) {
+            const response = await fetch(`${base}/${version}`, { signal: AbortSignal.timeout(30000) })
+            if (response.status === 404) return null
+            assert.ok(response.ok, `Registry check failed: HTTP ${response.status}`)
+            return response.json()
+          }
+          const existing = await versionInfo(packed.version)
+          if (existing) {
+            assert.equal(existing.dist.integrity, integrity, 'This version already exists with different bytes.')
+            console.log('Identical version already published; continuing without republishing.')
+          } else {
+            const latest = await versionInfo('latest')
+            if (latest) {
+              const next = packed.version.split('.').map(Number)
+              const old = latest.version.split('.').map(Number)
+              const first = next.findIndex((part, index) => part !== old[index])
+              assert.ok(first >= 0 && next[first] > old[first], 'Refusing to move latest backwards.')
+            }
+            execFileSync('npm', ['publish', tarball, '--ignore-scripts', '--access', 'public',
+              '--tag', 'latest', '--provenance', '--registry=https://registry.npmjs.org/'], { stdio: 'inherit' })
+          }
+          for (let attempt = 0; ; attempt++) {
+            const published = await versionInfo(packed.version)
+            if (published) {
+              assert.equal(published.dist.integrity, integrity, 'Published artifact integrity differs.')
+              break
+            }
+            assert.ok(attempt < 11, 'Registry did not expose the published version within two minutes.')
+            await setTimeout(10000)
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `tarball=${tarball}\n`)
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            `Published [${packed.name}@${packed.version}](https://www.npmjs.com/package/${packed.name}/v/${packed.version}).\n`)
+          JS
+
+      - name: Create or finish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TARBALL: ${{ steps.npm.outputs.tarball }}
+        shell: bash
+        run: |
+          status=$(curl --silent --show-error --max-time 30 \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            --output "$RUNNER_TEMP/github-release.json" --write-out '%{http_code}' \
+            "$GITHUB_API_URL/repos/$GH_REPO/releases/tags/$GITHUB_REF_NAME")
+          case "$status" in
+            200) gh release upload "$GITHUB_REF_NAME" "$TARBALL" --clobber ;;
+            404) gh release create "$GITHUB_REF_NAME" "$TARBALL" \
+                   --verify-tag --generate-notes --title "$GITHUB_REF_NAME" ;;
+            *) echo "GitHub release lookup failed: HTTP $status" >&2; exit 1 ;;
+          esac

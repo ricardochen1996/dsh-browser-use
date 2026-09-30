@@ -1,6 +1,7 @@
 {
   "name": "@weichen96/dsh-browser-use",
   "version": "0.1.0",
+  "packageManager": "pnpm@12.5.1",
   "type": "module",
   "description": "DeepSeek Harness browser provider: read a page as an indexed action space, then run one guarded operation at a time.",
   "icon": "icon.svg",
@@ -58,7 +59,9 @@
     "test": "node test/plugin.mjs && node test/delegation.mjs && node test/inspector.mjs",
     "test:python": "uv run pytest",
     "test:e2e": "uv run python test/check_bridge.py && uv run python test/check_tabs.py",
-    "check": "uv run ruff check . && uv run pytest -q && node test/plugin.mjs && node test/delegation.mjs && node test/inspector.mjs"
+    "check": "uv run ruff check . && uv run pytest -q && npm run release:check && node test/plugin.mjs && node test/delegation.mjs && node test/inspector.mjs",
+    "release:check": "uv run python bin/check_release.py",
+    "release:pack": "npm run release:check && node bin/check-package.mjs"
   },
   "dsh": {
     "bundle": {

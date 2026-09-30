@@ -147,7 +147,7 @@ The host half is plain ESM; the web half is a hand-written `__ModuleLoader__` sc
 Requires Node.js `^22.19.0 || >=24.0.0`, DSH, Chrome/Chromium, Python 3.12+ and `uv`.
 
 ```bash
-dsh plugin --profile desktop add @weichen96/dsh-browser-use@0.1.0
+dsh plugin --profile desktop add @weichen96/dsh-browser-use
 
 # The npm package ships the bridge, not the separate Python engine.
 git clone https://github.com/ricardochen1996/jev-ultrafast.git /absolute/path/to/jev-ultrafast
@@ -162,7 +162,7 @@ Set the engine checkout in the profile's `cordis.patch.yml`, then restart DSH:
     projectPath: /absolute/path/to/jev-ultrafast
 ```
 
-The plugin uses that checkout's Python environment; npm does not install Chrome or Python dependencies. Use `browser_doctor` in DSH to check the setup. If installing the package into a Node project rather than a DSH profile, use `npm install @weichen96/dsh-browser-use@0.1.0`; this alone does not register it with DSH.
+The plugin uses that checkout's Python environment; npm does not install Chrome or Python dependencies. Use `browser_doctor` in DSH to check the setup. If installing the package into a Node project rather than a DSH profile, use `npm install @weichen96/dsh-browser-use`; this alone does not register it with DSH. Append `@0.1.0` to either command to pin the first release.
 
 If migrating from the unpublished local `@rc/dsh-browser-use` package, remove that plugin entry before adding the npm package; do not enable both providers. The internal `id: dsh-browser-use` and configuration keys remain unchanged.
 
@@ -356,13 +356,15 @@ In both modes, the endpoint and key used by `browser_goal` and `browser_act`'s `
 ## 6. Verify (spends nothing)
 
 ```bash
-npm run check             # everything: Python units + Node checks (real browser, no model calls)
-uv run pytest             # 35: sidecar protocol contract (offline, incl. browser_act intent's Jev choice/text/refusal)
+npm run check             # lint, Python units, release metadata + Node checks (real browser, no model calls)
+uv run pytest             # offline sidecar protocol and release-gate tests
 uv run python test/check_bridge.py   # 10: sidecar end-to-end (stdio + real browser)
 uv run python test/check_tabs.py     # 5: a launch leaves exactly one tab
 node test/plugin.mjs      # 66: 24 tools & refusals (real browser) + 3 element-state rendering + 4 missing-engine diagnostics + 16 engine config + 2 attach exclusivity + 3 attach-to-your-Chrome + 11 settings form & immediate effect + 3 in-flight cancel
 node test/delegation.mjs  # 45: conversation sees only browser_task, persistent subagent takes later tasks, restores & re-mounts tools after release/restart, fresh & lost replacement, one-shot delegation, cancel & fallback
 node test/inspector.mjs   # 27: web-half registration + config form registration keys/fields/write-back + host routing + page renders
+npm run release:check     # npm/Python/uv.lock version and publishing metadata agreement
+npm run release:pack      # inspect and install the exact npm tarball; writes dist/ (no publishing)
 ```
 
 When the engine isn't a sibling directory:
@@ -447,6 +449,50 @@ engine = jev_ultrafast (a separate repo), imported by the sidecar as a Python de
 
 ```bash
 dsh plugin --profile desktop remove @weichen96/dsh-browser-use
+```
+
+## 11. CI and releases
+
+[`ci.yml`](https://github.com/ricardochen1996/dsh-browser-use/blob/main/.github/workflows/ci.yml) runs on pull requests and pushes to `main`. It tests Node 22.19.0 and 24.21.0 with Python 3.12 on Ubuntu 24.04, using the runner's Chrome. Actions, package-manager versions and the external engine commit are pinned; pnpm and uv install from their lockfiles. The checks include lint, unit tests, real-browser integration, matching npm/Python versions, generated chart consistency, and an isolated install of the actual npm tarball. No model credentials are needed. Update the engine SHA in this workflow deliberately when adopting engine changes.
+
+[`release.yml`](https://github.com/ricardochen1996/dsh-browser-use/blob/main/.github/workflows/release.yml) runs on annotated `vX.Y.Z` tags whose commits are reachable from `main`. It reruns CI and publishes **the exact tarball CI tested**, then creates a GitHub Release with generated notes and the tarball attached. Only stable releases are supported; prerelease tags are refused rather than accidentally published as `latest`. Reruns skip npm publication only when the existing version's integrity matches; different bytes for the same version fail. New releases cannot move `latest` backwards.
+
+### One-time trusted publishing setup
+
+In the npm package's **Settings → Trusted publishing**, add a GitHub Actions publisher:
+
+| Setting | Value |
+| --- | --- |
+| Organization or user | `ricardochen1996` |
+| Repository | `dsh-browser-use` |
+| Workflow filename | `release.yml` |
+| Environment | `npm` |
+
+In GitHub, create the **`npm` environment** and allow version-tag deployments. Required-reviewer approval is recommended. Keep the publisher's environment name identical to the workflow. The publishing job alone receives `id-token: write` and `contents: write`; CI stays read-only. npm OIDC generates short-lived credentials and provenance, so no `NPM_TOKEN` secret is required. These account settings must be configured by a package/repository administrator before the first automated release.
+
+### Cut the next version
+
+Start from a clean, up-to-date `main` checkout with the engine installed. Keep all three version records together:
+
+```bash
+npm version 0.1.1 --no-git-tag-version
+uv version 0.1.1 --no-sync
+npm run check
+npm run test:e2e
+npm run release:pack
+
+git add package.json pyproject.toml uv.lock
+git commit -m "chore(release): v0.1.1"
+git tag -a v0.1.1 -m "v0.1.1"
+git push --atomic origin main v0.1.1
+```
+
+Inspect the Release workflow before announcing the release. To retry a failed run, use **Re-run jobs**, or `gh workflow run release.yml --ref v0.1.1`; dispatching on a branch is rejected. Never move a published tag or reuse a published version.
+
+`v0.1.0` records the source of the already-published npm package and predates these workflows. Pushing that tag does **not** run the new workflow, and it must not be moved to the CI commit. After pushing `main` and `v0.1.0`, its GitHub release can be backfilled without republishing npm:
+
+```bash
+gh release create v0.1.0 --verify-tag --generate-notes --title v0.1.0
 ```
 
 ---
