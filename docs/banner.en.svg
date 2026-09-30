@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" role="img" aria-label="dsh-browser-use: a fast pair of hands for DeepSeek Harness, powered by Jev">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1026"/>
+      <stop offset="0.55" stop-color="#16204a"/>
+      <stop offset="1" stop-color="#1e3a8a"/>
+    </linearGradient>
+    <linearGradient id="bolt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fde68a"/>
+      <stop offset="1" stop-color="#f59e0b"/>
+    </linearGradient>
+    <linearGradient id="streak" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#60a5fa" stop-opacity="0"/>
+      <stop offset="1" stop-color="#60a5fa" stop-opacity="0.9"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="8" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#ffffff" stroke-opacity="0.05"/>
+    </pattern>
+  </defs>
+
+  <rect width="1280" height="400" fill="url(#sky)"/>
+  <rect width="1280" height="400" fill="url(#grid)"/>
+
+  <!-- speed streaks -->
+  <g>
+    <rect x="560" y="96" width="170" height="4" rx="2" fill="url(#streak)"/>
+    <rect x="520" y="150" width="210" height="3" rx="1.5" fill="url(#streak)" opacity="0.7"/>
+    <rect x="590" y="262" width="140" height="4" rx="2" fill="url(#streak)"/>
+    <rect x="540" y="318" width="190" height="3" rx="1.5" fill="url(#streak)" opacity="0.6"/>
+  </g>
+
+  <!-- title -->
+  <g font-family="-apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif" fill="#ffffff">
+    <text x="64" y="150" font-size="60" font-weight="800" letter-spacing="-1">dsh-browser-use</text>
+    <text x="66" y="206" font-size="27" font-weight="600" fill="#bfdbfe">A <tspan fill="#fbbf24">fast</tspan> pair of hands for DeepSeek Harness</text>
+    <text x="66" y="252" font-size="18" fill="#c7d2fe" opacity="0.9">Page → indexed action table → Jev picks one operation per step</text>
+    <g font-size="15" font-weight="600">
+      <rect x="66" y="286" width="150" height="34" rx="17" fill="#fbbf24" fill-opacity="0.15" stroke="#fbbf24" stroke-opacity="0.6"/>
+      <text x="141" y="308" text-anchor="middle" fill="#fde68a">⚡ Fast with Jev</text>
+      <rect x="228" y="286" width="180" height="34" rx="17" fill="#60a5fa" fill-opacity="0.15" stroke="#60a5fa" stroke-opacity="0.6"/>
+      <text x="318" y="308" text-anchor="middle" fill="#bfdbfe">Persistent subagent</text>
+      <rect x="420" y="286" width="170" height="34" rx="17" fill="#34d399" fill-opacity="0.15" stroke="#34d399" stroke-opacity="0.6"/>
+      <text x="505" y="308" text-anchor="middle" fill="#a7f3d0">No model-authored code</text>
+    </g>
+  </g>
+
+  <!-- browser window -->
+  <g transform="translate(760 60)">
+    <rect x="8" y="10" width="456" height="290" rx="16" fill="#000" opacity="0.35"/>
+    <rect width="456" height="290" rx="16" fill="#0f172a" stroke="#334155"/>
+    <rect width="456" height="40" rx="16" fill="#1e293b"/>
+    <rect y="24" width="456" height="16" fill="#1e293b"/>
+    <circle cx="24" cy="20" r="6" fill="#f87171"/>
+    <circle cx="44" cy="20" r="6" fill="#fbbf24"/>
+    <circle cx="64" cy="20" r="6" fill="#34d399"/>
+    <rect x="92" y="10" width="340" height="20" rx="10" fill="#0f172a"/>
+    <text x="108" y="25" font-family="Menlo, Consolas, monospace" font-size="12" fill="#94a3b8">stayfinder.test / search</text>
+
+    <g font-family="Menlo, Consolas, monospace" font-size="15">
+      <g transform="translate(22 72)">
+        <text fill="#64748b">[4]</text><text x="42" fill="#e2e8f0">textbox  Destination</text><text x="330" fill="#93c5fd">TYPE_TEXT</text>
+      </g>
+      <g transform="translate(22 112)">
+        <rect x="-10" y="-22" width="432" height="32" rx="8" fill="#fbbf24" fill-opacity="0.14" stroke="#fbbf24" stroke-opacity="0.7"/>
+        <text fill="#fbbf24">[6]</text><text x="42" fill="#fde68a">checkbox Free cancel.</text><text x="330" fill="#fde68a">CLICK ◀</text>
+      </g>
+      <g transform="translate(22 152)">
+        <text fill="#64748b">[7]</text><text x="42" fill="#e2e8f0">checkbox Breakfast</text><text x="330" fill="#93c5fd">CLICK</text>
+      </g>
+      <g transform="translate(22 192)">
+        <text fill="#64748b">[9]</text><text x="42" fill="#e2e8f0">button   Search</text><text x="330" fill="#93c5fd">CLICK</text>
+      </g>
+      <g transform="translate(22 244)">
+        <text fill="#34d399">✓</text><text x="24" fill="#6ee7b7" font-size="13">observation 3 · fingerprint ok · 1 action</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- lightning bolt -->
+  <path d="M700 40 L640 200 L690 200 L655 360 L760 170 L705 170 L745 40 Z" fill="url(#bolt)" filter="url(#glow)"/>
+</svg>
