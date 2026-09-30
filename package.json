@@ -35,6 +35,7 @@
     "lib/sessions.js",
     "lib/sidecar.js",
     "lib/tools.js",
+    "lib/status.js",
     "lib/inspector.js",
     "lib/client.js",
     "bin/doctor.mjs",
