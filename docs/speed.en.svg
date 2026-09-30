@@ -19,5 +19,5 @@
 <rect x="430" y="338" width="450" height="44" rx="10" fill="url(#slow)"/>
 <text x="896" y="368" font-size="22" font-weight="800" fill="#e2e8f0">26.7 s</text>
 <text x="896" y="388" font-size="12" fill="#94a3b8">median decision 3.6 s · verified 3/3 · 2.5× slower</text>
-<text x="48" y="478" font-size="12" fill="#64748b">Clock: first decision after page open → DONE / finish. The Jev-off arm uses a lean prompt, lighter than a real DSH turn, so it is favoured. Data: bench/results.json</text>
+<text x="48" y="478" font-size="12" fill="#64748b">Clock: first decision after page open → DONE / finish. Decision-loop comparison; excludes DSH delegation and chat round-trips. Data: bench/results.json</text>
 </g></svg>

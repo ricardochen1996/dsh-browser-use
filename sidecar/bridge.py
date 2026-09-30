@@ -574,7 +574,8 @@ class Session:
         """The value for one field, from the Jev text model. Spends model quota."""
         if not str(engine_env.get("TEXT_MODEL_API_KEY") or "").strip():
             raise BridgeError("no_credentials",
-                              "TYPE_TEXT without text needs a text-model key: configure jev in the dsh-browser-use plugin config")
+                              "TYPE_TEXT without text needs a text-model key: "
+                              "configure jev in the dsh-browser-use plugin config")
         try:
             with engine_environment(engine_env):
                 value, helper = field_text(field_context(intent, action, self.page, self.history))

@@ -63,7 +63,7 @@
 
       <rect x="560" y="400" width="260" height="30" rx="15" fill="#ffffff" stroke="#fcd34d"/>
       <text x="690" y="420" font-size="13" fill="#92400e">TYPE_TEXT 时才调用文本模型写值</text>
-      <text x="740" y="470" font-size="14" fill="#92400e">大模型只下达目标、检查结果，不再逐步决策</text>
+      <text x="740" y="470" font-size="14" fill="#92400e">仅比较决策循环；browser_act 的外层会话往返不计入本基准</text>
     </g>
   </g>
 </svg>

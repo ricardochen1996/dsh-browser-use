@@ -2,7 +2,7 @@
 
 **English** · [中文](README.zh-CN.md)
 
-# @rc/dsh-browser-use
+# @weichen96/dsh-browser-use
 
 > Give **DeepSeek Harness** a browser that can *see and click*: a page is read as an **indexed action-space table**, and the model does exactly one operation on one observed target per step.
 
@@ -12,7 +12,7 @@ This is a **DSH plugin** (a host half + a web half). It contains no browser logi
 
 ## ⚡ The point: speed
 
-There is one reason to install this — it's **fast**. With jev on, each browser step is no longer a whole turn of the main chat model but **one choice by Jev (TypeSafe System One) on the current action table**: it picks the operation and target directly, and only calls the text model when a `TYPE_TEXT` needs a value. Dropping the per-step system prompt, history and reasoning makes every round-trip much shorter.
+The focus is **fast browser decisions**. Jev (TypeSafe System One) picks an operation and target from the current action table; a text model supplies values only when needed for `TYPE_TEXT`. `browser_goal` runs the decision loop inside the engine. `browser_act({ observation, intent })` delegates one decision to Jev, but still returns to its calling agent after each step. Enabling Jev makes these paths available; it does not automatically replace every chat-model turn.
 
 <img src="docs/speed.en.svg" alt="Same task: Jev on ~10.7s, Jev off ~24.6–26.7s" width="100%" />
 
@@ -24,11 +24,11 @@ The same local hotel task (type a city, tick two filters, search, open a result)
 | Jev off (reasoning low) | a full deepseek-v4.1-flash turn | 24.6 s | **2.3× slower** |
 | Jev off (reasoning max, current DSH setting) | a full deepseek-v4.1-flash turn | 26.7 s | **2.5× slower** |
 
-**With jev on the same job is ~2.5× faster**, and the median per-step decision latency drops from 2.8–3.6 s to 1.1 s.
+**In this decision-loop benchmark, Jev took about 60% less time than the max-reasoning arm** (26.7 s / 10.7 s ≈ 2.5). Median per-step decision latency was 1.1 s versus 2.8–3.6 s.
 
 <img src="docs/how-it-works.en.svg" alt="Jev off: every step is a full chat-model turn; Jev on: every step is one TypeSafe choice" width="100%" />
 
-> The clock runs from the first decision after the page opens to DONE/finish. To avoid overstating the gap, the "Jev off" arm was fed only a lean prompt — lighter than a real DSH turn — so the real-world gap is only larger. Three arms, 3 runs each, all independently verified; the script and raw data are in [`bench/`](bench/) (run it with `.venv/bin/python bench/speed.py`; credentials come only from the environment and are never written to the repo). The benchmark model is DSH's current main-conversation model (`deepseek-v4.1-flash`) — the same route the text model actually uses under `jev.source: session`.
+> Measured on 2026-09-30: three arms, three completed runs each, all independently verified; one transport failure was recorded and retried. The clock runs from the first decision after page opening to DONE/finish. The script directly loops over the sidecar's intent path versus lean Responses API tool-calling turns using `deepseek-v4.1-flash`, the model configured in DSH at measurement time. This is **not an end-to-end DSH toggle comparison**: it excludes browser startup, initial navigation, post-run verification, DSH delegation and outer chat round-trips. Three runs of one local task do not establish a universal speedup. The Jev text helper uses the same model with thinking disabled; session mode shares routing settings, not necessarily protocol or reasoning settings. See [`bench/`](bench/) for the script and raw data. The benchmark spends model quota and reads credentials only from environment variables.
 
 ---
 
@@ -136,13 +136,39 @@ A launch leaves exactly **one** tab: the browser opens a startup tab, and the co
 The host half is plain ESM; the web half is a hand-written `__ModuleLoader__` script — no tsdown/rollup step. Clone it, `pnpm install` once (only for `@deepseek-ai/schemastery`, used by the Config schema), then edit and restart.
 
 ### 10. Capabilities can be turned off
-`allowScreenshots`, `jev.enabled` and `reserveBrowserUseSlot` are all config options; if you only want "see + click", turn the paid policies off — the first two toggle from the **Sidebar → Plugins → `@rc/dsh-browser-use`** config area, with immediate effect.
+`allowScreenshots`, `jev.enabled` and `reserveBrowserUseSlot` are all config options. Turn off `jev.enabled` to keep decisions with the calling model. The Jev settings are editable under **Sidebar → Plugins → `@weichen96/dsh-browser-use`**; `allowScreenshots` and `reserveBrowserUseSlot` are profile-patch settings.
 
 ---
 
 ## 3. Install
 
-This repo holds both the plugin (Node) and its Python half (the sidecar). Three steps:
+### From npm
+
+Requires Node.js `^22.19.0 || >=24.0.0`, DSH, Chrome/Chromium, Python 3.12+ and `uv`.
+
+```bash
+dsh plugin --profile desktop add @weichen96/dsh-browser-use@0.1.0
+
+# The npm package ships the bridge, not the separate Python engine.
+git clone https://github.com/ricardochen1996/jev-ultrafast.git /absolute/path/to/jev-ultrafast
+uv sync --project /absolute/path/to/jev-ultrafast
+```
+
+Set the engine checkout in the profile's `cordis.patch.yml`, then restart DSH:
+
+```yaml
+- id: dsh-browser-use
+  config:
+    projectPath: /absolute/path/to/jev-ultrafast
+```
+
+The plugin uses that checkout's Python environment; npm does not install Chrome or Python dependencies. Use `browser_doctor` in DSH to check the setup. If installing the package into a Node project rather than a DSH profile, use `npm install @weichen96/dsh-browser-use@0.1.0`; this alone does not register it with DSH.
+
+If migrating from the unpublished local `@rc/dsh-browser-use` package, remove that plugin entry before adding the npm package; do not enable both providers. The internal `id: dsh-browser-use` and configuration keys remain unchanged.
+
+### From a local checkout
+
+This repo holds both the plugin (Node) and its Python half (the sidecar). Clone the engine into the sibling `../jev-ultrafast` first, then:
 
 ```bash
 # 1. Python environment: install the engine into this repo's own .venv (defaults to the sibling ../jev-ultrafast)
@@ -245,8 +271,8 @@ The `browser_doctor` tool returns the same report plus the current Session's bro
 
 **Change it in the UI (recommended)**: the plugin exports DSH's `Config` schema (`lib/config.js`), and the web half mounts the form in two places, so you don't need to find a config file and changes take effect immediately:
 
-- **Sidebar → Plugins → open `@rc/dsh-browser-use`**: the toggles are drawn right above "Included components" (the plugin page's own config area).
-- On the same page, **the `dsh-browser-use` row title is itself a "Configure" button** (with a `>` arrow, accessible name `Configure @rc/dsh-browser-use`) — it opens the same form.
+- **Sidebar → Plugins → open `@weichen96/dsh-browser-use`**: the toggles are drawn right above "Included components" (the plugin page's own config area).
+- On the same page, **the `dsh-browser-use` row title is itself a "Configure" button** (with a `>` arrow, accessible name `Configure @weichen96/dsh-browser-use`) — it opens the same form.
 
 The form has **only the jev group**, drawn with the shell's own components in the same row layout as other plugins:
 
@@ -325,7 +351,7 @@ In both modes, the endpoint and key used by `browser_goal` and `browser_act`'s `
 | `subagentProvider` | `spawn` | the provider name in `ctx.subagents`; it must be able to compose an **in-process** subagent, otherwise it falls back to direct mode |
 | `maxDepth` | `0` | delegation-depth cap for the subagent; `0` means use the provider's own recursion budget |
 
-✎ = appears in the form under **Sidebar → Plugins → `@rc/dsh-browser-use`** (the package page, or the "Configure" in the row title), with immediate effect (the next time the value is used); fields without ✎ are set only in the profile patch.
+✎ = appears in the form under **Sidebar → Plugins → `@weichen96/dsh-browser-use`** (the package page, or the "Configure" in the row title), with immediate effect (the next time the value is used); fields without ✎ are set only in the profile patch.
 
 ## 6. Verify (spends nothing)
 
@@ -336,7 +362,7 @@ uv run python test/check_bridge.py   # 10: sidecar end-to-end (stdio + real brow
 uv run python test/check_tabs.py     # 5: a launch leaves exactly one tab
 node test/plugin.mjs      # 66: 24 tools & refusals (real browser) + 3 element-state rendering + 4 missing-engine diagnostics + 16 engine config + 2 attach exclusivity + 3 attach-to-your-Chrome + 11 settings form & immediate effect + 3 in-flight cancel
 node test/delegation.mjs  # 45: conversation sees only browser_task, persistent subagent takes later tasks, restores & re-mounts tools after release/restart, fresh & lost replacement, one-shot delegation, cancel & fallback
-node test/inspector.mjs   # 23: web-half registration + config form registration keys/fields/write-back + host routing + page renders
+node test/inspector.mjs   # 27: web-half registration + config form registration keys/fields/write-back + host routing + page renders
 ```
 
 When the engine isn't a sibling directory:
@@ -347,7 +373,7 @@ DSH_BROWSER_USE_PROJECT=/path/to/jev-ultrafast node test/plugin.mjs
 
 ## 7. Relation to the official `@deepseek-ai/dsh-browser-use`
 
-DSH ships `@deepseek-ai/dsh-browser-use`, which is the **service definition** for "browser capability" (one registration slot only, with no browser operations: no `dsh.bundle`, no `./client`, no registered tools). This project is a **third-party provider implementation**, package name `@rc/dsh-browser-use` — a different scope, so the two don't override each other.
+DSH ships `@deepseek-ai/dsh-browser-use`, which is the **service definition** for "browser capability" (one registration slot only, with no browser operations: no `dsh.bundle`, no `./client`, no registered tools). This project is a **third-party provider implementation**, package name `@weichen96/dsh-browser-use` — a different scope, so the two don't override each other.
 
 The unscoped `dsh-browser-use` on npm is **a different project** (a Browser Use Cloud bridge), unrelated to this plugin; install by scope so you don't get the wrong one.
 
@@ -378,7 +404,7 @@ Only the **package name** changed. These are stable anchors for config and UI an
 - web half: tab id `dsh-browser-use/inspector`, panel route `/browser-use/`;
 - log and error prefix: `dsh-browser-use:`.
 
-**The only thing that must equal the package name is the module id registered by `lib/client.js`** (`__ModuleLoader__.load({ id })`), which is now `@rc/dsh-browser-use` — the host dispatches by the loader line's `name` (i.e. the package name), and getting it wrong shows `bundle … loaded without registering "…"` in the console.
+**The client module id and plugin form registration keys must use the package name**, now `@weichen96/dsh-browser-use`. The host dispatches `__ModuleLoader__.load({ id })` by the loader line's `name` (the package name); a mismatch shows `bundle … loaded without registering "…"` in the console. The `cordis.patch.yml` bundle row uses the same package name while retaining its internal row id.
 
 ## 8. How it works
 
@@ -420,7 +446,7 @@ engine = jev_ultrafast (a separate repo), imported by the sidecar as a Python de
 ## 10. Uninstall
 
 ```bash
-dsh plugin --profile desktop remove @rc/dsh-browser-use
+dsh plugin --profile desktop remove @weichen96/dsh-browser-use
 ```
 
 ---
