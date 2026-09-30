@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "浏览器自动化 (dsh-browser-use)",
+    "description": "把浏览器交给这个 Session：页面读成带索引的操作空间，一步一个带新鲜度校验的动作，默认由常驻浏览器子 agent 代跑。"
+  }
+}
