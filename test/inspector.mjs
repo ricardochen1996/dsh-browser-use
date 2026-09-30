@@ -32,6 +32,30 @@ const PAGE = {
   operations: { CLICK: ['1', '3'], TYPE_TEXT: ['1'], SELECT: ['2:1'], WAIT: [] },
 }
 
+/**
+ * The shell's React entry, cut down to what the client half uses: elements become plain trees, a
+ * hook answers with its initial state, and the settings mirror is read through its snapshot.
+ */
+const reactStub = () => ({
+  createElement: (type, props, ...children) => ({ type, props, children }),
+  useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}],
+  useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(),
+})
+
+/**
+ * The shell's primitives, recorded as the host elements they render, so a check drives the very
+ * interaction the page would: a toggle click, a menu pick, a typed field.
+ */
+const primitivesStub = () => ({
+  Input: props => ({ type: 'input', props, children: [] }),
+  Switch: props => ({
+    type: 'button',
+    props: { ...props, onClick: () => { props.onChange(props.checked !== true) } },
+    children: [],
+  }),
+  Menu: props => ({ type: 'div', props, children: [props.anchor] }),
+})
+
 /** The registrations the client half makes, recorded the way the shell would receive them. */
 async function checkClientHalf() {
   const registrations = []
@@ -50,11 +74,10 @@ async function checkClientHalf() {
       },
     },
   }
+  const required = []
   const require = specifier => {
-    check(specifier === 'react', 'the client half requires only the shell\u2019s React entry')
-    return {
-      createElement: (type, props, ...children) => ({ type, props, children }),
-    }
+    required.push(specifier)
+    return specifier === 'react' ? reactStub() : primitivesStub()
   }
   await import(pathToFileURL(join(PACKAGE_ROOT, 'lib', 'client.js')).href)
   const loaded = globalThis.__loaded
@@ -63,10 +86,14 @@ async function checkClientHalf() {
   const plugin = loaded.factory(require)
   check(plugin.name === 'dsh-browser-use-client' && typeof plugin.apply === 'function', 'the factory returns a Cordis plugin face')
   check(plugin.inject.includes('slots') && plugin.inject.includes('sidebarRightTabs'), 'the client half injects the slots and tab registries')
+  check(required.includes('@deepseek-ai/dsh-client-ui-primitives'),
+    'the form draws its controls with the shell\u2019s own primitives instead of raw inputs')
 
   const ctx = {
     slots,
     sidebarRightTabs,
+    // No settings mirror in this composition: the row page still registers, the bundle card does not.
+    inject: () => {},
     effect: callback => { const disposer = callback(); effects.push(disposer); return () => {} },
   }
   plugin.apply(ctx)
@@ -80,6 +107,121 @@ async function checkClientHalf() {
   check(body?.name === 'sidebar.right.pane.tab' && body.key === tab.id, 'the tab body is registered under its own slot key')
   const element = registrations.find(entry => entry.component).component()
   check(element.type === 'iframe' && element.props.src === '/browser-use/', 'the tab body frames the host route')
+  check(registrations.some(entry => entry.options?.name === 'plugins.row.config'),
+    'the row configuration still registers without a settings mirror')
+}
+
+/**
+ * The switch form the Plugins page renders for this plugin's row: the key that gives the row its
+ * configure control, the fields it draws, and the write one edit produces.
+ */
+async function checkSwitchForm() {
+  const registrations = []
+  const effects = []
+  const slots = {
+    inject: (name, register) => { effects.push(() => register()); return () => {} },
+    register: (options, component) => { registrations.push({ options, component }); return () => {} },
+  }
+  const require = specifier => (specifier === 'react' ? reactStub() : primitivesStub())
+  globalThis.window = { __ModuleLoader__: { load: ({ factory }) => { globalThis.__loaded = { factory } } } }
+  await import(pathToFileURL(join(PACKAGE_ROOT, 'lib', 'client.js')).href)
+  const plugin = globalThis.__loaded.factory(require)
+  const cardWrites = []
+  const controller = {
+    getSnapshot: () => ({ status: 'ready', writable: true, revision: 3, value: { mode: 'attach', jev: { enabled: true } } }),
+    subscribe: () => () => {},
+    mutate: (operations, revision) => { cardWrites.push({ operations, revision }); return Promise.resolve(true) },
+  }
+  const ctx = {
+    slots,
+    sidebarRightTabs: { register: () => () => {} },
+    effect: callback => { const disposer = callback(); effects.push(disposer); return () => {} },
+    inject: (names, callback) => {
+      if (names.includes('configForms')) callback({ slots, effect: ctx.effect, configForms: { get: () => controller } })
+    },
+  }
+  plugin.apply(ctx)
+  for (const effect of effects) effect()
+
+  const page = registrations.find(entry => entry.options?.name === 'plugins.row.config')
+  check(page?.options.key === '@rc/dsh-browser-use#dsh-browser-use',
+    'the row configuration is keyed by the package and the row id the page looks for')
+  const card = registrations.find(entry => entry.options?.name === 'plugins.bundle.config')
+  check(card?.options.key === '@rc/dsh-browser-use',
+    'the bundle page card is registered under the bundle name, so the switches show without opening a row')
+
+  check(page.component({ view: 'summary', form: undefined }) === null, 'the row summary draws nothing, so the metadata description stands')
+  check(page.component({ view: 'page', form: undefined }) !== null, 'a page without a form says so instead of throwing')
+
+  // A miniature renderer: expand the function components, keep host elements.
+  const render = node => {
+    if (Array.isArray(node)) return node.flatMap(render)
+    if (node === null || node === undefined || typeof node !== 'object') return []
+    if (typeof node.type === 'function') return render(node.type(node.props))
+    return [node, ...node.children.flatMap(render)]
+  }
+  // Expanding `Fields` and its group wrappers (but not the rows) keeps one element per setting row.
+  const rowsOf = element => {
+    const found = []
+    const walk = node => {
+      if (Array.isArray(node)) return node.forEach(walk)
+      if (node === null || typeof node !== 'object') return
+      if (node.props?.row !== undefined) { found.push(node); return }
+      if (typeof node.type === 'function') return walk(node.type(node.props))
+      ;(node.children ?? []).forEach(walk)
+    }
+    walk(typeof element.type === 'function' ? element.type(element.props) : element)
+    return found
+  }
+  const pathsOf = element => rowsOf(element).map(node => node.props.row.path.join('.')).sort()
+  const rowFor = (element, path) => rowsOf(element).find(node => node.props.row.path.join('.') === path)
+  const controlFor = (element, path) => render(rowFor(element, path))
+
+  const writes = []
+  const form = {
+    state: { status: 'ready', writable: true, revision: 7, value: { jev: { enabled: false, source: 'session', typesafe: {} } } },
+    mutate: (operations, revision) => { writes.push({ operations, revision }); return Promise.resolve(true) },
+  }
+  const pageFields = pathsOf(page.component({ view: 'page', form }))
+  check(JSON.stringify(pageFields) === JSON.stringify([
+    'jev.enabled', 'jev.source',
+    'jev.textModel.apiKey', 'jev.textModel.apiKeyEnv', 'jev.textModel.baseURL', 'jev.textModel.model',
+    'jev.typesafe.apiKey', 'jev.typesafe.apiKeyEnv', 'jev.typesafe.baseURL', 'jev.typesafe.model',
+  ].sort()), `the form offers jev and nothing else (got ${pageFields.join(', ')})`)
+
+  // The toggle is the shell's Switch: a button that asks for the opposite state.
+  controlFor(page.component({ view: 'page', form }), 'jev.enabled').find(node => node.type === 'button').props.onClick()
+  check(writes[0]?.operations?.[0]?.op === 'set' && writes[0].operations[0].path.join('.') === 'jev.enabled'
+    && writes[0].operations[0].value === true && writes[0].revision === 7,
+  'toggling browser_goal writes the live path with the revision the page read')
+
+  // A text field commits on blur, not on every keystroke.
+  const url = controlFor(page.component({ view: 'page', form }), 'jev.typesafe.baseURL').find(node => node.type === 'input')
+  url.props.onChange({ target: { value: 'https://gateway.test/systemone' } })
+  url.props.onBlur({ target: { value: 'https://gateway.test/systemone' } })
+  check(writes[1]?.operations?.[0]?.value === 'https://gateway.test/systemone', 'a typed endpoint is written when the field settles')
+
+  // The source is the shell's Menu: a pick writes the chosen id.
+  const source = controlFor(page.component({ view: 'page', form }), 'jev.source').find(node => typeof node.props?.onSelect === 'function')
+  source.props.onSelect('custom')
+  check(writes[2]?.operations?.[0]?.path.join('.') === 'jev.source' && writes[2].operations[0].value === 'custom',
+    'picking a credential source writes the chosen id')
+
+  const before = writes.length
+  const secret = controlFor(page.component({ view: 'page', form }), 'jev.typesafe.apiKey').find(node => node.type === 'input')
+  check(secret.props.type === 'password', 'a key is drawn as a password field')
+  secret.props.onBlur({ target: { value: '' } })
+  check(writes.length === before, 'an untouched secret is not written back, so the stored key survives the form')
+
+  // The bundle page's card reads the namespace itself, so its write goes through that controller.
+  const cardElement = card.component({ view: 'page' })
+  check(JSON.stringify(pathsOf(cardElement)) === JSON.stringify(pageFields),
+    'the bundle page card draws the same switches as the row page')
+  controlFor(cardElement, 'jev.enabled').find(node => node.type === 'button').props.onClick()
+  // The mirror reports jev on, so the toggle asks for off — and the write carries the mirror's revision.
+  check(cardWrites[0]?.operations?.[0]?.path.join('.') === 'jev.enabled' && cardWrites[0].operations[0].value === false
+    && cardWrites[0].revision === 3,
+  'a switch on the bundle page writes through the settings mirror with the revision it read')
 }
 
 /** The host route as the shell reaches it: same handler, a real HTTP server. */
@@ -123,6 +265,7 @@ async function checkHostRoute() {
 }
 
 await checkClientHalf()
+await checkSwitchForm()
 await checkHostRoute()
 if (!SERVE) {
   console.log(passed.join('\n'))

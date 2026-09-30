@@ -121,11 +121,63 @@ def test_open_launches_a_dedicated_browser_when_no_endpoint_is_configured(monkey
     assert [step for step in launched[1:]] == ["terminated", ("waited", 10)]
 
 
-def test_attach_mode_without_an_endpoint_is_refused_before_any_browser_exists(monkeypatch):
-    monkeypatch.delenv("BU_CDP_WS", raising=False)
+def test_attach_without_an_endpoint_hands_discovery_to_browser_harness(monkeypatch, tmp_path):
+    """Your own Chrome is found only while no endpoint is set, so an earlier one is dropped."""
+    monkeypatch.setenv("BU_CDP_WS", "ws://127.0.0.1:1234/devtools/browser/earlier")
+    monkeypatch.setenv("BU_CDP_URL", "http://127.0.0.1:1234")
+    checked = []
+    monkeypatch.setattr(bridge, "discover_local_browser", lambda: checked.append(True) or tmp_path)
+    session = bridge.Session(open_browser=pytest.fail, launch=pytest.fail)
+    session._connect({"mode": "attach"})
+    assert checked == [True]
+    assert "BU_CDP_WS" not in bridge.os.environ and "BU_CDP_URL" not in bridge.os.environ
+    assert session.owned_browser is None  # a browser you started is never one this sidecar stops
+
+
+def test_attach_without_an_endpoint_says_what_is_missing_before_any_browser_exists(monkeypatch, tmp_path):
+    monkeypatch.setattr(bridge.socket, "create_connection", lambda *arguments, **keywords: pytest.fail())
+    discover = bridge.discover_local_browser
+    monkeypatch.setattr(bridge, "discover_local_browser", lambda: discover([tmp_path / "Chrome"]))
     opened = bridge.Session(open_browser=pytest.fail, launch=pytest.fail)
     error = failure(opened, "open", url="https://example.test/", mode="attach")
-    assert error["kind"] == "no_browser" and "cdpEndpoint" in error["message"]
+    assert error["kind"] == "no_browser" and "chrome://inspect/#remote-debugging" in error["message"]
+
+
+def test_discovery_finds_the_profile_whose_debugging_port_is_live(tmp_path):
+    stale, live = tmp_path / "Chrome Canary", tmp_path / "Chrome"
+    stale.mkdir()
+    live.mkdir()
+    with bridge.socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        closed = bridge.free_port()  # nothing listens here: a browser that quit left its file behind
+        (stale / "DevToolsActivePort").write_text(f"{closed}\n/devtools/browser/gone\n")
+        (live / "DevToolsActivePort").write_text(f"{listener.getsockname()[1]}\n/devtools/browser/abc\n")
+        assert bridge.discover_local_browser([tmp_path / "Missing", stale, live]) == live
+
+
+def test_discovery_that_is_denied_the_profile_asks_for_full_disk_access(tmp_path, monkeypatch):
+    profile = tmp_path / "Chrome"
+    profile.mkdir()
+    (profile / "DevToolsActivePort").write_text("9222\n/devtools/browser/abc\n")
+    real_read = Path.read_text
+
+    def denied(path, *arguments, **keywords):
+        if path.name == "DevToolsActivePort":
+            raise PermissionError(1, "Operation not permitted")
+        return real_read(path, *arguments, **keywords)
+
+    monkeypatch.setattr(Path, "read_text", denied)
+    with pytest.raises(bridge.BridgeError) as error:
+        bridge.discover_local_browser([profile])
+    assert error.value.kind == "no_permission" and "Full Disk Access" in str(error.value)
+
+
+def test_an_unknown_mode_is_refused(monkeypatch):
+    monkeypatch.delenv("BU_CDP_WS", raising=False)
+    opened = bridge.Session(open_browser=pytest.fail, launch=pytest.fail)
+    error = failure(opened, "open", url="https://example.test/", mode="borrow")
+    assert error["kind"] == "bad_request" and "unknown mode" in error["message"]
 
 
 def test_attach_takes_an_http_endpoint_and_drops_a_ws_url_that_would_outlive_it(monkeypatch):
@@ -243,6 +295,7 @@ def test_click_runs_the_offered_target_and_returns_the_next_observation(session)
 def test_type_text_needs_words_and_a_fill_target(session):
     assert failure(session, "act", operation="TYPE_TEXT", target="1",
                    fingerprint=session.page["fingerprint"])["kind"] == "bad_request"
+    assert session.browser.calls == []  # without an intent there is nothing to write the value from
     # The same element also offers CLICK, and a click carries no text.
     assert call(session, "act", operation="CLICK", target="1",
                 fingerprint=session.page["fingerprint"])["executed"]["executed"] == "e2"
@@ -357,11 +410,132 @@ def test_goal_mode_reports_the_policy_trace_and_needs_both_arguments(session, mo
 
     monkeypatch.setattr(agent_module, "Agent", FakeAgent)
     assert failure(session, "goal", url="https://example.test/", goal="")["kind"] == "bad_request"
-    result = call(session, "goal", url="https://example.test/", goal="Find the first result")
+    result = call(session, "goal", url="https://example.test/", goal="Find the first result",
+                  engine_env={"TYPESAFE_API_KEY": "from-plugin-config"})
     assert seen == {"url": "https://example.test/", "goal": "Find the first result", "options": {"screenshots": False}}
     assert result["status"] == "done" and result["steps"] == 1
     assert result["history"][0]["operation"] == "CLICK"
     assert result["text_calls"] == [{"field": "Search", "value": "flights"}]
+
+
+def test_goal_mode_needs_a_key_from_the_plugin_config_and_never_reads_the_engine_env_file(session, monkeypatch):
+    from jev_ultrafast import agent as agent_module
+
+    def refuse(*arguments, **options):
+        raise AssertionError("the agent must not start without a key")
+
+    monkeypatch.setattr(agent_module, "Agent", refuse)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ambient-must-not-count")
+    error = failure(session, "goal", url="https://example.test/", goal="Find it")
+    assert error["kind"] == "no_credentials" and "jev" in error["message"]
+    assert "request_environment" not in vars(bridge)
+
+
+def test_goal_mode_sees_exactly_the_variables_of_its_request_and_none_after(session, monkeypatch):
+    from jev_ultrafast import agent as agent_module
+
+    seen = {}
+
+    class FakeAgent:
+        def __init__(self, url, goal, **options):
+            seen.update({name: bridge.os.environ.get(name) for name in bridge.ENGINE_VARIABLES})
+
+        def run(self):
+            yield {"status": "done", "elapsed_ms": 1, "history": [], "text_calls": []}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *arguments):
+            return False
+
+    monkeypatch.setattr(agent_module, "Agent", FakeAgent)
+    monkeypatch.setenv("TEXT_MODEL", "ambient-model")
+    call(session, "goal", url="https://example.test/", goal="Find it",
+         engine_env={"TYPESAFE_API_KEY": "k1", "TEXT_MODEL_API_KEY": "k2", "TEXT_MODEL_BASE_URL": "https://gw.test/v1"})
+    assert seen["TYPESAFE_API_KEY"] == "k1" and seen["TEXT_MODEL_API_KEY"] == "k2"
+    assert seen["TEXT_MODEL_BASE_URL"] == "https://gw.test/v1" and seen["TEXT_MODEL"] is None
+    assert not any(name in bridge.os.environ for name in bridge.ENGINE_VARIABLES)
+
+
+def test_an_intent_lets_jev_choose_the_step_with_exactly_the_request_variables(session, monkeypatch):
+    seen = {}
+
+    def choose(state, goal, history):
+        seen.update(goal=goal, history=list(history),
+                    env={name: bridge.os.environ.get(name) for name in bridge.ENGINE_VARIABLES})
+        return {"choice": "e3", "operation": "CLICK", "target": "2", "confidence": 0.9, "model": "jev-1"}
+
+    monkeypatch.setattr(bridge, "choose", choose)
+    result = call(session, "act", intent="Submit the search", fingerprint=session.page["fingerprint"],
+                  engine_env={"TYPESAFE_API_KEY": "k1"})
+    assert seen["goal"] == "Submit the search" and seen["history"] == []
+    assert seen["env"]["TYPESAFE_API_KEY"] == "k1"
+    assert not any(name in bridge.os.environ for name in bridge.ENGINE_VARIABLES)
+    assert session.browser.calls == [("e3", None)]
+    assert result["decision"] == {"operation": "CLICK", "target": "2", "label": "Go", "confidence": 0.9, "model": "jev-1"}
+    assert result["executed"]["operation"] == "CLICK" and result["executed"]["label"] == "Go"
+    # The next choice sees what just ran, so a click the page ignored is not chosen again.
+    call(session, "act", intent="Submit the search", fingerprint=session.page["fingerprint"],
+         engine_env={"TYPESAFE_API_KEY": "k1"})
+    assert seen["history"][0]["operation"] == "CLICK" and seen["history"][0]["page_changed"] is True
+
+
+def test_a_jev_verdict_of_done_executes_nothing(session, monkeypatch):
+    monkeypatch.setattr(bridge, "choose", lambda state, goal, history: {
+        "choice": "DONE", "operation": "DONE", "target": None, "confidence": 0.8, "model": "jev-1"})
+    result = call(session, "act", intent="Search", fingerprint=session.page["fingerprint"],
+                  engine_env={"TYPESAFE_API_KEY": "k1"})
+    assert result["decision"]["operation"] == "DONE" and "executed" not in result
+    assert session.browser.calls == []
+
+
+def test_type_text_without_text_takes_its_value_from_the_jev_text_model(session, monkeypatch):
+    seen = {}
+
+    def field_text(context):
+        seen.update(context=context, key=bridge.os.environ.get("TEXT_MODEL_API_KEY"))
+        return "flights to Tokyo", {"model": "flash", "latency_ms": 1, "usage": {}}
+
+    monkeypatch.setattr(bridge, "field_text", field_text)
+    monkeypatch.setattr(bridge, "choose", lambda *arguments: pytest.fail("an explicit operation needs no choice"))
+    result = call(session, "act", operation="TYPE_TEXT", target="1", intent="Search for flights to Tokyo",
+                  fingerprint=session.page["fingerprint"], engine_env={"TEXT_MODEL_API_KEY": "k2"})
+    assert seen["key"] == "k2" and seen["context"]["goal"] == "Search for flights to Tokyo"
+    assert session.browser.calls == [("e1", "flights to Tokyo")]
+    assert result["generated_text"] == {"value": "flights to Tokyo", "model": "flash"}
+    assert "decision" not in result
+
+
+def test_an_intent_without_the_key_it_needs_spends_nothing(session, monkeypatch):
+    monkeypatch.setattr(bridge, "choose", lambda *arguments: pytest.fail("no key, no model call"))
+    monkeypatch.setattr(bridge, "field_text", lambda *arguments: pytest.fail("no key, no model call"))
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ambient-must-not-count")
+    fingerprint = session.page["fingerprint"]
+    assert failure(session, "act", intent="Search", fingerprint=fingerprint)["kind"] == "no_credentials"
+    assert failure(session, "act", operation="TYPE_TEXT", target="1", intent="Search",
+                   fingerprint=fingerprint, engine_env={"TYPESAFE_API_KEY": "k1"})["kind"] == "no_credentials"
+    assert failure(session, "act", fingerprint=fingerprint)["kind"] == "bad_request"
+    assert failure(session, "act", intent="Search", fingerprint="outdated")["kind"] == "stale"
+    assert session.browser.calls == []
+
+
+def test_a_model_that_fails_is_reported_and_nothing_runs(session, monkeypatch):
+    def unavailable(*arguments):
+        raise RuntimeError("Model unavailable")
+
+    monkeypatch.setattr(bridge, "choose", unavailable)
+    error = failure(session, "act", intent="Search", fingerprint=session.page["fingerprint"],
+                    engine_env={"TYPESAFE_API_KEY": "k1"})
+    assert error["kind"] == "model_error" and "Model unavailable" in error["message"]
+
+    def no_value(context):
+        raise bridge.NoTextValue("Text helper returned no valid field value; nothing typed.")
+
+    monkeypatch.setattr(bridge, "field_text", no_value)
+    assert failure(session, "act", operation="TYPE_TEXT", target="1", intent="Search",
+                   fingerprint=session.page["fingerprint"], engine_env={"TEXT_MODEL_API_KEY": "k2"})["kind"] == "no_text"
+    assert session.browser.calls == []
 
 
 @pytest.mark.parametrize("configured", [None, "/does/not/exist"])

@@ -45,6 +45,7 @@ function optionFor(text, pattern) {
 function fakeContext() {
   const tools = new Map()
   const disposers = []
+  const listeners = new Map()
   const agent = {
     id: 'session-plugin-check',
     ctx: { effect: callback => { disposers.push(callback()); return () => {} } },
@@ -55,8 +56,15 @@ function fakeContext() {
     systemPrompt: { section: () => {}, getSectionOrder: () => 0 },
     logger: { info: () => {}, warn: () => {} },
     get: name => (name === 'agents' ? { get: id => (id === agent.id ? agent : undefined) } : undefined),
-    // No subagent provider and no events in this composition: the plugin stays in direct mode.
-    on: () => () => {},
+    // No subagent provider in this composition, so the plugin stays in direct mode; the event
+    // registry is real, because a live config edit arrives as `loader/volatile-update`.
+    on: (event, handler) => {
+      const registered = listeners.get(event) ?? []
+      registered.push(handler)
+      listeners.set(event, registered)
+      return () => { listeners.set(event, (listeners.get(event) ?? []).filter(entry => entry !== handler)) }
+    },
+    emit: (event, ...args) => { for (const handler of [...(listeners.get(event) ?? [])]) handler(...args) },
     effect: callback => {
       const generator = callback()
       let step = generator.next()
@@ -66,7 +74,13 @@ function fakeContext() {
       }
     },
   }
-  return { ctx, tools, agent, dispose: async () => { for (const dispose of disposers.reverse()) await dispose() } }
+  return {
+    ctx,
+    tools,
+    agent,
+    emit: ctx.emit,
+    dispose: async () => { for (const dispose of disposers.reverse()) await dispose() },
+  }
 }
 
 async function main() {
@@ -78,7 +92,7 @@ async function main() {
     projectPath: ENGINE,
     userDataDir: join(profile, 'browser'),
     headless: true,
-    allowGoalMode: false,
+    jev: { enabled: false },
   })
 
   const run = (name, args) => tools.get(name).execute(args, { agent, signal: new AbortController().signal })
@@ -176,6 +190,94 @@ async function missingEngine() {
 }
 
 /**
+ * The engine checkout and the goal-mode endpoints and keys come from the plugin configuration only:
+ * not from the engine checkout's `.env`, not from DSH's launch environment under the engine's names.
+ */
+async function engineConfiguration() {
+  const engine = await import(pathToFileURL(join(PACKAGE_ROOT, 'lib', 'engine.js')).href)
+  const plugin = await import(pathToFileURL(join(PACKAGE_ROOT, 'lib', 'index.js')).href)
+  let count = 0
+  const ok = (condition, message) => { check(condition, message); count += 1 }
+
+  const report = await engine.inspectEngine({ projectPath: ENGINE, mode: 'launch' }, { fresh: true })
+  ok(report.engine !== undefined && report.engine.enginePath.startsWith(ENGINE),
+    'the sidecar runs on an interpreter that imports the engine from projectPath')
+
+  const elsewhere = await mkdtemp(join(tmpdir(), 'dsh-browser-use-project-'))
+  try {
+    const other = await engine.inspectEngine({ projectPath: elsewhere, mode: 'launch' }, { fresh: true })
+    ok(other.ok === false && other.engine === undefined,
+      'an engine imported from outside projectPath is not used')
+    ok(engine.reportText(other).includes(`not from projectPath ${elsewhere}`),
+      'the doctor says which checkout the refused interpreter imported instead')
+  } finally {
+    await rm(elsewhere, { recursive: true, force: true })
+  }
+
+  const jev = await import(pathToFileURL(join(PACKAGE_ROOT, 'lib', 'jev.js')).href)
+  const refused = message => {
+    try { plugin.apply(fakeContext().ctx, message); return undefined } catch (error) { return String(error.message) }
+  }
+  ok(/jev\.typesafe\.baseURL/u.test(refused({ jev: { typesafe: { baseURL: 'not a url' } } }) ?? ''), 'a bad endpoint URL is refused')
+  ok(/apiKeyEnv/u.test(refused({ jev: { source: 'custom', textModel: { apiKeyEnv: 'sk-a key' } } }) ?? ''), 'a key pasted into apiKeyEnv is refused')
+  ok(/only applies to jev\.source: custom/u.test(refused({ jev: { source: 'session', textModel: { baseURL: 'https://x.test/v1' } } }) ?? ''),
+    'an endpoint or key written for session mode is refused instead of silently ignored')
+  ok(/jev\.source/u.test(refused({ jev: { source: 'main' } }) ?? ''), 'an unknown source is refused')
+  ok(jev.resolveJevConfig({ allowGoalMode: true }).enabled === true, 'the older allowGoalMode still turns jev on')
+
+  const credentials = { resolve: async name => (name === 'GATEWAY_KEY' ? { value: 'stored-key', source: 'file' } : undefined) }
+  const custom = {
+    jev: jev.resolveJevConfig({ jev: {
+      enabled: true,
+      source: 'custom',
+      typesafe: { baseURL: 'https://gateway.test/systemone', model: 'jev-1', apiKeyEnv: 'GATEWAY_KEY' },
+      textModel: { baseURL: 'https://gateway.test/v1', model: 'text-1', apiKey: 'literal-text-key', reasoning: 'thinking-disabled', headers: { 'x-session': 'dsh' } },
+    } }),
+  }
+  const withCredentials = { get: name => (name === 'credentials' ? credentials : undefined) }
+  const { env } = await jev.jevEnvironment(custom, withCredentials, undefined)
+  ok(env.TYPESAFE_API_KEY === 'stored-key' && env.TEXT_MODEL_API_KEY === 'literal-text-key',
+    'custom: keys come from the named DSH credential or the literal apiKey')
+  ok(env.TYPESAFE_BASE_URL === 'https://gateway.test/systemone' && env.TYPESAFE_MODEL === 'jev-1'
+    && env.TEXT_MODEL === 'text-1' && env.TEXT_MODEL_REASONING === 'thinking-disabled'
+    && env.TEXT_MODEL_HEADERS === '{"x-session":"dsh"}' && !('TYPESAFE_FALLBACK_URL' in env),
+  'custom: endpoints, models, reasoning and headers map to the engine variables')
+
+  // A composition whose main conversation runs on a gateway route declared in llm-pi-ai.
+  const route = { provider: 'gateway-responses', model: 'deepseek-flash' }
+  const profile = { api: 'openai-responses', baseURL: 'https://gateway.test/go/v1', apiKeyEnv: 'GATEWAY_KEY', headers: { 'x-opencode-session': 'dsh' } }
+  const composition = profiles => ({
+    get: name => ({
+      credentials,
+      llm: { listConfigurableProviders: () => [{ provider: route.provider, settingsNs: 'llm-pi-ai', settingsPath: ['providers', route.provider] }] },
+      settings: { describe: () => [{ ns: 'llm-pi-ai', value: { providers: { [route.provider]: profiles } } }] },
+    })[name],
+  })
+  const owner = { session: { requestHeader: () => ({ config: route }) } }
+  const session = { jev: jev.resolveJevConfig({ jev: { enabled: true, source: 'session', typesafe: { baseURL: 'https://gateway.test/systemone', model: 'jev-1' } } }) }
+  const inherited = await jev.jevEnvironment(session, composition(profile), owner)
+  ok(inherited.env.TYPESAFE_API_KEY === 'stored-key' && inherited.env.TEXT_MODEL_API_KEY === 'stored-key'
+    && inherited.env.TEXT_MODEL_BASE_URL === profile.baseURL && inherited.env.TEXT_MODEL === 'deepseek-flash'
+    && inherited.env.TEXT_MODEL_HEADERS === '{"x-opencode-session":"dsh"}' && inherited.env.TYPESAFE_BASE_URL === 'https://gateway.test/systemone',
+  'session: the main conversation\u2019s route supplies the text endpoint, model, headers and both keys')
+  route.model = 'glm-5.3'
+  ok((await jev.jevEnvironment(session, composition(profile), owner)).env.TEXT_MODEL === 'glm-5.3',
+    'session: a model switch in the main conversation reaches the next call')
+  const overridden = { jev: jev.resolveJevConfig({ jev: { enabled: true, textModel: { model: 'fast-one', headers: { 'x-extra': '1' } } } }) }
+  const override = (await jev.jevEnvironment(overridden, composition(profile), owner)).env
+  ok(override.TEXT_MODEL === 'fast-one' && override.TEXT_MODEL_HEADERS === '{"x-opencode-session":"dsh","x-extra":"1"}',
+    'session: textModel.model overrides the inherited model and textModel.headers add to the route’s')
+  const status = await jev.jevStatus(session, composition({ ...profile, api: 'anthropic-messages' }), owner)
+  ok(/NOT USABLE/u.test(status) && /Anthropic/u.test(status) && !status.includes('stored-key'),
+    'the doctor explains why a route cannot be inherited, without printing any key')
+  ok(/not chosen a model/u.test(await jev.jevStatus(session, composition(profile), { session: { requestHeader: () => undefined } })),
+    'a conversation without a model yet says so')
+  ok(/jev\.enabled is false/u.test(await jev.jevStatus({ jev: jev.resolveJevConfig({}) }, undefined, owner)),
+    'with jev off nothing is resolved')
+  console.log(`PASS: ${count} engine-configuration checks; no browser, no model calls`)
+}
+
+/**
  * One attached browser belongs to one Session. The refusal is decided before the engine is asked to
  * do anything, so this needs no browser: the first Session takes the reservation and fails on the
  * missing engine, and the second is refused for the reason that matters.
@@ -206,6 +308,110 @@ async function attachExclusivity() {
   check(/attached by another live Session/u.test(secondFailure), 'a second Session is refused the attached browser')
   check(!/not usable/u.test(secondFailure), 'the refusal explains the reservation instead of the engine')
   console.log(`PASS: 2 attach-exclusivity checks; no browser, no engine`)
+}
+
+/**
+ * Attach mode without an endpoint drives the Chrome you browse with. The profile accepts it, and every
+ * message about the attached browser names that browser instead of an empty endpoint.
+ */
+async function attachToYourChrome() {
+  const { ctx, tools, agent } = fakeContext()
+  const plugin = await import(pathToFileURL(join(PACKAGE_ROOT, 'lib', 'index.js')).href)
+  plugin.apply(ctx, { pythonPath: '/nonexistent/python', projectPath: '', mode: 'attach' })
+  const doctor = await tools.get('browser_doctor').execute({}, { agent, signal: new AbortController().signal })
+  check(/mode attach on your running Chrome/u.test(doctor.text), 'the doctor names your running Chrome as the attached browser')
+
+  let refused
+  try {
+    plugin.apply(fakeContext().ctx, { pythonPath: '/nonexistent/python', mode: 'borrow' })
+  } catch (error) {
+    refused = String(error.message)
+  }
+  check(/mode must be "launch" or "attach"/u.test(refused ?? ''), 'an unknown mode is refused when the profile loads')
+
+  const { Sessions } = await import(pathToFileURL(join(PACKAGE_ROOT, 'lib', 'sessions.js')).href)
+  const agents = new Map()
+  const make = id => {
+    const owner = { id, ctx: { effect: () => () => {} } }
+    agents.set(id, owner)
+    return owner
+  }
+  const sessions = new Sessions(
+    { get: name => (name === 'agents' ? { get: id => agents.get(id) } : undefined) },
+    { mode: 'attach', cdpEndpoint: '', pythonPath: '/nonexistent/python', requestTimeoutMs: 1000 },
+  )
+  const attempt = owner => sessions.run(owner, undefined, async () => 'opened').then(() => '', error => String(error.message))
+  await attempt(make('session-yours-one'))
+  const second = await attempt(make('session-yours-two'))
+  check(/your running Chrome .* is attached by another live Session/u.test(second),
+    'a second Session is refused your running Chrome by name')
+  console.log('PASS: 3 attach-to-your-Chrome checks; no browser, no engine')
+}
+
+/**
+ * What the Settings page shows and what a live edit does.
+ *
+ * DSH renders that page from the plugin's exported `Config`: only fields under a volatile node get a
+ * form field, and an edit is committed into the reference the running plugin holds instead of
+ * recomposing it. Both halves are checked here against the same rules the settings service applies.
+ */
+async function settingsForm() {
+  const config = await import(pathToFileURL(join(PACKAGE_ROOT, 'lib', 'config.js')).href)
+  const plugin = await import(pathToFileURL(join(PACKAGE_ROOT, 'lib', 'index.js')).href)
+  let count = 0
+  const ok = (condition, message) => { check(condition, message); count += 1 }
+
+  ok(plugin.Config === config.Config && Reflect.get(config.Config, Symbol.for('schemastery')) === true
+    && config.Config.type === 'object',
+  'the plugin exports a native Config schema, which is what the Settings page renders')
+
+  // The settings service keeps a field whose nearest volatile ancestor is marked, and drops the rest.
+  const formFields = (schema, prefix = '') => {
+    if (schema.meta?.volatile === true) return [prefix]
+    return Object.entries(schema.dict ?? {}).flatMap(([key, child]) => formFields(child, prefix === '' ? key : `${prefix}.${key}`))
+  }
+  const fields = formFields(config.Config).sort()
+  ok(JSON.stringify(fields) === JSON.stringify([
+    'jev.enabled', 'jev.source',
+    'jev.textModel.apiKey', 'jev.textModel.apiKeyEnv', 'jev.textModel.baseURL', 'jev.textModel.model',
+    'jev.typesafe.apiKey', 'jev.typesafe.apiKeyEnv', 'jev.typesafe.baseURL', 'jev.typesafe.model',
+  ].sort()), `the form offers jev and nothing else (got ${fields.join(', ')})`)
+  ok(!fields.includes('mode') && !fields.includes('delegate') && !fields.includes('allowScreenshots')
+    && !fields.includes('projectPath') && !fields.includes('reserveBrowserUseSlot'),
+  'the switches that decide which tools exist stay profile-patch settings')
+
+  // A live edit: the Loader commits the value into the reference the plugin was handed.
+  const { ctx, tools, agent, emit } = fakeContext()
+  const parsed = config.Config({
+    pythonPath: '/nonexistent/python',
+    projectPath: '',
+    jev: { enabled: false },
+  })
+  ok(typeof parsed.jev.enabled?.get === 'function' && config.plain(parsed.jev.enabled) === false,
+    'a live field arrives as a reference the plugin can read now')
+  plugin.apply(ctx, parsed)
+  const doctor = async () => (await tools.get('browser_doctor').execute({}, { agent, signal: new AbortController().signal })).text
+  ok(!tools.has('browser_goal'), 'browser_goal is absent until the Settings page turns jev on')
+  const actSchema = () => tools.get('browser_act').parameters
+  ok(actSchema().properties.intent === undefined && actSchema().required.includes('operation'),
+    'with jev off, browser_act takes an operation and offers no intent')
+
+  const LIVE = Symbol.for('cosmokit.volatile.write')
+  parsed.jev.enabled[LIVE](true)
+  parsed.jev.typesafe.baseURL[LIVE]('https://gateway.test/systemone')
+  emit('loader/volatile-update', [['jev', 'enabled'], ['jev', 'typesafe', 'baseURL']])
+
+  ok(tools.has('browser_goal'), 'turning jev on from the plugin form offers browser_goal without a restart')
+  ok(actSchema().properties.intent?.type === 'string' && !actSchema().required.includes('operation'),
+    'turning jev on lets browser_act take an intent in place of an operation')
+  const act = args => tools.get('browser_act').execute(args, { agent, signal: new AbortController().signal })
+  ok(/^Refused: Jev cannot run/u.test((await act({ observation: 1, intent: 'Submit the form' })).text),
+    'an intent whose Jev credentials cannot be resolved is refused before any browser or model call')
+  ok(/^Refused: give an operation/u.test((await act({ observation: 1 })).text),
+    'neither an operation nor an intent is refused')
+  ok(/^Jev\s*: on, source session/u.test((await doctor()).split('\n').find(line => line.startsWith('Jev')) ?? ''),
+    'the doctor reports the edited jev state')
+  console.log(`PASS: ${count} settings-form checks; no browser, no engine, no model calls`)
 }
 
 /**
@@ -248,7 +454,28 @@ async function cancelInFlight() {
   console.log('PASS: 3 cancellation checks; real sidecar, no model calls')
 }
 
+/** Control state reaches the model: without it, it cannot tell a ticked box from an unticked one. */
+async function elementStates() {
+  const { pageText } = await import(pathToFileURL(join(PACKAGE_ROOT, 'lib', 'tools.js')).href)
+  const text = pageText({
+    url: 'https://example.test/', title: 'T', operations: { CLICK: ['1', '2', '3'] },
+    elements: [
+      { index: '1', role: 'checkbox', label: 'Free cancellation', value: 'on', checked: 'true', operations: ['CLICK'] },
+      { index: '2', role: 'checkbox', label: 'Pool', value: 'on', checked: 'false', operations: ['CLICK'] },
+      { index: '3', role: 'button', label: 'Filters', expanded: 'false', operations: ['CLICK'] },
+    ],
+  }, 1)
+  check(text.includes('[1] checkbox Free cancellation · "on" (checked) — CLICK'), 'a ticked checkbox reads as checked')
+  check(text.includes('[2] checkbox Pool · "on" (not checked) — CLICK'), 'an unticked checkbox reads as not checked')
+  check(text.includes('[3] button Filters (collapsed) — CLICK'), 'a collapsed disclosure reads as collapsed')
+  console.log('PASS: 3 element-state checks; no browser')
+}
+
+await elementStates()
 await main()
 await missingEngine()
+await engineConfiguration()
 await attachExclusivity()
+await attachToYourChrome()
+await settingsForm()
 await cancelInFlight()
