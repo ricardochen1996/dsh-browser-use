@@ -63,7 +63,7 @@
 
       <rect x="540" y="400" width="300" height="30" rx="15" fill="#ffffff" stroke="#fcd34d"/>
       <text x="690" y="420" font-size="13" fill="#92400e">text model writes the value only for TYPE_TEXT</text>
-      <text x="740" y="470" font-size="14" fill="#92400e">the chat model only sets the goal and checks results — no per-step decisions</text>
+      <text x="740" y="470" font-size="14" fill="#92400e">decision loop only; outer browser_act chat round-trips are not measured</text>
     </g>
   </g>
 </svg>

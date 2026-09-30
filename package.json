@@ -1,11 +1,22 @@
 {
-  "name": "@rc/dsh-browser-use",
+  "name": "@weichen96/dsh-browser-use",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "DeepSeek Harness browser provider: read a page as an indexed action space, then run one guarded operation at a time.",
   "icon": "icon.svg",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ricardochen1996/dsh-browser-use.git"
+  },
+  "homepage": "https://github.com/ricardochen1996/dsh-browser-use#readme",
+  "bugs": {
+    "url": "https://github.com/ricardochen1996/dsh-browser-use/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "main": "lib/index.js",
   "exports": {
     ".": {
@@ -30,7 +41,14 @@
     "cordis.patch.yml",
     "icon.svg",
     "locale/*.json",
-    "README.md"
+    "README.md",
+    "README.zh-CN.md",
+    "docs/*.svg",
+    "pyproject.toml",
+    "uv.lock",
+    "bench/*.py",
+    "bench/fixture.html",
+    "bench/results.json"
   ],
   "engines": {
     "node": "^22.19.0 || >=24.0.0"

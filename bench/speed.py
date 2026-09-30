@@ -83,7 +83,12 @@ def page_text(page, observation):
         for key, on, off in (("checked", "checked", "not checked"), ("selected", "selected", "not selected"),
                              ("expanded", "expanded", "collapsed")):
             state = str(element.get(key, ""))
-            states += [on] if state == "true" else [off] if state == "false" else [f"partly {on}"] if state == "mixed" else []
+            if state == "true":
+                states.append(on)
+            elif state == "false":
+                states.append(off)
+            elif state == "mixed":
+                states.append(f"partly {on}")
         lines.append(f"[{element['index']}] {details}" + (f' · "{value}"' if value else "")
                      + (f" ({', '.join(states)})" if states else "") + f" — {', '.join(element['operations'])}")
         for option in element.get("options") or []:
@@ -145,8 +150,10 @@ def run_jev(session, engine_env):
             outcome = decision["operation"].lower()
             break
     total = round((time.perf_counter() - start) * 1000)
-    return {"elapsed_ms": total, "outcome": outcome, "actions": len([s for s in steps if s["operation"] not in {"DONE", "BLOCKED", "STALE"}]),
-            "decisions": len(calls.get("decide_ms", [])), "model_ms": sum(calls.get("decide_ms", [])) + sum(calls.get("write_ms", [])),
+    return {"elapsed_ms": total, "outcome": outcome,
+            "actions": len([s for s in steps if s["operation"] not in {"DONE", "BLOCKED", "STALE"}]),
+            "decisions": len(calls.get("decide_ms", [])),
+            "model_ms": sum(calls.get("decide_ms", [])) + sum(calls.get("write_ms", [])),
             "decide_ms": calls.get("decide_ms", []), "write_ms": calls.get("write_ms", []), "steps": steps}
 
 
@@ -168,7 +175,10 @@ def respond(llm, effort, conversation):
 
 def run_llm(session, llm, effort):
     observation = 1
-    conversation = [{"role": "user", "content": f"Goal: {GOAL}\n\n{page_text(bridge.observation(session.page), observation)}"}]
+    conversation = [{
+        "role": "user",
+        "content": f"Goal: {GOAL}\n\n{page_text(bridge.observation(session.page), observation)}",
+    }]
     steps, latencies, usage, outcome = [], [], {"input_tokens": 0, "output_tokens": 0}, "max_steps"
     start = time.perf_counter()
     for _ in range(MAX_STEPS):
@@ -202,7 +212,8 @@ def run_llm(session, llm, effort):
         conversation.append({"type": "function_call_output", "call_id": call["call_id"], "output": output})
     total = round((time.perf_counter() - start) * 1000)
     return {"elapsed_ms": total, "outcome": outcome, "actions": len([s for s in steps if s["operation"] != "DONE"]),
-            "decisions": len(latencies), "model_ms": sum(latencies), "decide_ms": latencies, "usage": usage, "steps": steps}
+            "decisions": len(latencies), "model_ms": sum(latencies),
+            "decide_ms": latencies, "usage": usage, "steps": steps}
 
 
 def one_run(session, profile, url, arm, engine_env, llm):
@@ -249,7 +260,8 @@ def main():
                     raise SystemExit(f"{arm} run {index + 1} failed three times")
                 runs.append(result)
                 print(f"{arm:10} run {index + 1}: {result['elapsed_ms'] / 1000:6.2f} s  {result['actions']} actions  "
-                      f"{result['decisions']} decisions  outcome={result['outcome']}  verified={result['verified']}", flush=True)
+                      f"{result['decisions']} decisions  outcome={result['outcome']}  verified={result['verified']}",
+                      flush=True)
                 if not result["verified"]:
                     print(f"           final={result['final']} steps={result['steps']}", flush=True)
     finally:
@@ -270,7 +282,9 @@ def main():
         meta = {"goal": GOAL, "date": time.strftime("%Y-%m-%d"), "typesafe_model": engine_env.get("TYPESAFE_MODEL"),
                 "text_model": engine_env.get("TEXT_MODEL"), "text_reasoning": engine_env.get("TEXT_MODEL_REASONING"),
                 "llm_model": llm["model"], "headless": True}
-        args.out.write_text(json.dumps({"meta": meta, "summary": summary, "runs": runs, "voided": voided}, indent=2, ensure_ascii=False) + "\n")
+        args.out.write_text(json.dumps(
+            {"meta": meta, "summary": summary, "runs": runs, "voided": voided}, indent=2, ensure_ascii=False,
+        ) + "\n")
 
 
 if __name__ == "__main__":

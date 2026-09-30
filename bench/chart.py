@@ -20,17 +20,26 @@ TEXT = {
         "task": "本地酒店搜索页 · 输入城市、勾两个筛选、搜索、打开结果 · 每组 {runs} 轮交替 · {date}",
         "stats": "每步决策中位 {decision:.1f} s · 校验通过 {verified}",
         "slower": " · 慢 {factor:.1f}×",
-        "note": "计时从页面打开后的第一次决策到 DONE / finish；关闭 jev 组只带精简提示词，比真实 DSH 一轮更轻，数字偏向大模型。数据：bench/results.json",
+        "note": (
+            "计时从页面打开后的第一次决策到 DONE / finish；"
+            "这是决策循环对比，不含 DSH 委派与主会话往返。数据：bench/results.json"
+        ),
     },
     "en": {
         "jev": ("Jev on", f"TypeSafe {meta['typesafe_model']} + {meta['text_model']}"),
         "llm:low": ("Jev off", f"{meta['llm_model']} · reasoning low"),
         "llm:max": ("Jev off", f"{meta['llm_model']} · reasoning max (current DSH setting)"),
         "title": "Same task, median time to done",
-        "task": "Local hotel search · type a city, tick two filters, search, open a result · {runs} alternating runs per arm · {date}",
+        "task": (
+            "Local hotel search · type a city, tick two filters, search, open a result · "
+            "{runs} alternating runs per arm · {date}"
+        ),
         "stats": "median decision {decision:.1f} s · verified {verified}",
         "slower": " · {factor:.1f}× slower",
-        "note": "Clock: first decision after page open → DONE / finish. The Jev-off arm uses a lean prompt, lighter than a real DSH turn, so it is favoured. Data: bench/results.json",
+        "note": (
+            "Clock: first decision after page open → DONE / finish. "
+            "Decision-loop comparison; excludes DSH delegation and chat round-trips. Data: bench/results.json"
+        ),
     },
 }
 
@@ -54,7 +63,7 @@ def draw(lang):
         f'<rect width="{width}" height="{height}" rx="20" fill="#0f172a"/>',
         f'<g font-family="{font}">',
         f'<text x="48" y="64" font-size="28" font-weight="800" fill="#f8fafc">{t["title"]}</text>',
-        f'<text x="48" y="96" font-size="15" fill="#94a3b8">'
+        '<text x="48" y="96" font-size="15" fill="#94a3b8">'
         + t["task"].format(runs=len([r for r in data["runs"] if r["arm"] == "jev"]), date=meta["date"]) + '</text>',
     ]
     for position, arm in enumerate(arms):
@@ -65,7 +74,8 @@ def draw(lang):
         fill = "url(#fast)" if arm == "jev" else "url(#slow)"
         colour = "#fde68a" if arm == "jev" else "#e2e8f0"
         parts += [
-            f'<text x="48" y="{y + 26}" font-size="20" font-weight="700" fill="{colour}">{title}{" ⚡" if arm == "jev" else ""}</text>',
+            f'<text x="48" y="{y + 26}" font-size="20" font-weight="700" fill="{colour}">'
+            f'{title}{" ⚡" if arm == "jev" else ""}</text>',
             f'<text x="48" y="{y + 50}" font-size="13" fill="#94a3b8">{detail}</text>',
             f'<rect x="{left}" y="{y + 6}" width="{length:.0f}" height="44" rx="10" fill="{fill}"/>',
             f'<text x="{left + length + 16:.0f}" y="{y + 36}" font-size="22" font-weight="800" fill="{colour}">'

@@ -473,7 +473,9 @@ def test_an_intent_lets_jev_choose_the_step_with_exactly_the_request_variables(s
     assert seen["env"]["TYPESAFE_API_KEY"] == "k1"
     assert not any(name in bridge.os.environ for name in bridge.ENGINE_VARIABLES)
     assert session.browser.calls == [("e3", None)]
-    assert result["decision"] == {"operation": "CLICK", "target": "2", "label": "Go", "confidence": 0.9, "model": "jev-1"}
+    assert result["decision"] == {
+        "operation": "CLICK", "target": "2", "label": "Go", "confidence": 0.9, "model": "jev-1",
+    }
     assert result["executed"]["operation"] == "CLICK" and result["executed"]["label"] == "Go"
     # The next choice sees what just ran, so a click the page ignored is not chosen again.
     call(session, "act", intent="Submit the search", fingerprint=session.page["fingerprint"],
@@ -533,8 +535,9 @@ def test_a_model_that_fails_is_reported_and_nothing_runs(session, monkeypatch):
         raise bridge.NoTextValue("Text helper returned no valid field value; nothing typed.")
 
     monkeypatch.setattr(bridge, "field_text", no_value)
-    assert failure(session, "act", operation="TYPE_TEXT", target="1", intent="Search",
-                   fingerprint=session.page["fingerprint"], engine_env={"TEXT_MODEL_API_KEY": "k2"})["kind"] == "no_text"
+    error = failure(session, "act", operation="TYPE_TEXT", target="1", intent="Search",
+                    fingerprint=session.page["fingerprint"], engine_env={"TEXT_MODEL_API_KEY": "k2"})
+    assert error["kind"] == "no_text"
     assert session.browser.calls == []
 
 

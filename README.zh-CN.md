@@ -2,7 +2,7 @@
 
 [English](README.md) · **中文**
 
-# @rc/dsh-browser-use
+# @weichen96/dsh-browser-use
 
 > 给 **DeepSeek Harness** 装上"能看、能点"的浏览器：页面被读成一张**带索引的动作空间表**，模型每步只做一个操作、只对一个观测到的目标。
 
@@ -12,7 +12,7 @@
 
 ## ⚡ 亮点：快
 
-装它的理由只有一个字——**快**。开启 jev 后，浏览器的每一步不再是主会话大模型的一整轮，而是 **Jev（TypeSafe System One）在当前动作表上的一次选择**：直接选出操作和目标，只有 `TYPE_TEXT` 要写值时才顺带调一次文本模型。省掉了每步的系统提示、历史与思考，往返自然短得多。
+亮点是**更快的浏览器决策**。Jev（TypeSafe System One）从当前动作表中选出操作与目标，只有 `TYPE_TEXT` 需要生成输入值时才调用文本模型。`browser_goal` 在引擎内完成整段决策循环；`browser_act({ observation, intent })` 则只把当前一步的决策交给 Jev，完成后仍返回调用它的 agent。打开 Jev 开关只是开放这些路径，不会自动替代所有大模型轮次。
 
 <img src="docs/speed.zh-CN.svg" alt="同一个任务：开启 jev 约 10.7s，关闭 jev 约 24.6–26.7s" width="100%" />
 
@@ -24,11 +24,11 @@
 | 关闭 jev（reasoning low） | deepseek-v4.1-flash 一整轮 | 24.6 s | **慢 2.3×** |
 | 关闭 jev（reasoning max，DSH 当前配置） | deepseek-v4.1-flash 一整轮 | 26.7 s | **慢 2.5×** |
 
-**开启 jev 后同一件事快约 2.5×**，而且每步决策的中位延迟从 2.8–3.6 s 压到 1.1 s。
+**在这次决策循环基准中，Jev 比 max 思考组少用约 60% 的时间**（26.7 s / 10.7 s ≈ 2.5），每步决策的中位延迟为 1.1 s，对照组为 2.8–3.6 s。
 
 <img src="docs/how-it-works.svg" alt="关闭 jev：每步都是大模型一整轮；开启 jev：每步只是一次 TypeSafe 选择" width="100%" />
 
-> 计时从"页面打开后的第一次决策"到 DONE/finish。为了不夸大差距，"关闭 jev" 那组只喂了精简提示词——比真实 DSH 一轮更轻，所以真实差距只会更大。三组各 3 轮、全部通过独立校验；脚本与原始数据见 [`bench/`](bench/)（跑法：`.venv/bin/python bench/speed.py`，凭据只从环境变量读，不写进仓库）。测速用的模型就是 DSH 当前主会话模型（`deepseek-v4.1-flash`），也是 `jev.source: session` 时文本模型实际会用的路由。
+> 测量日期为 2026-09-30：三组各完成 3 轮，全部通过独立校验；另记录了 1 次网络失败并重跑。计时从页面打开后的第一次决策到 DONE/finish。脚本直接循环调用 sidecar 的 intent 路径，对照组用精简提示词通过 Responses API 逐轮调用工具，模型是测量时 DSH 配置的 `deepseek-v4.1-flash`。这**不是 DSH 内切换开关的端到端对比**：不计浏览器启动、初始导航、结束后的独立校验、DSH 委派与外层会话往返。一个本地任务的三轮数据不代表普遍加速倍率。Jev 文本助手使用同名模型但关闭思考；session 模式共享路由配置，不代表协议和思考设置完全相同。脚本与原始数据见 [`bench/`](bench/)；测速会消耗模型额度，凭据只从环境变量读取。
 
 ---
 
@@ -136,13 +136,39 @@ Without a target: WAIT
 host 半是普通 ESM，Web 半是手写的 `__ModuleLoader__` 脚本，没有 tsdown/rollup 步骤；克隆下来 `pnpm install` 一次（只为 `@deepseek-ai/schemastery`，Config schema 用），之后改完重启即可。
 
 ### 10. 能力可关
-`allowScreenshots`、`jev.enabled`、`reserveBrowserUseSlot` 都是配置项；只想要"看图 + 点点点"就把付费策略关掉——前两个在**侧边栏「插件」→ `@rc/dsh-browser-use`** 的配置区里点一下就行，改完立即生效。
+`allowScreenshots`、`jev.enabled`、`reserveBrowserUseSlot` 都是配置项。关闭 `jev.enabled` 即由调用方模型继续决策；Jev 设置可在**侧边栏「插件」→ `@weichen96/dsh-browser-use`** 的配置区里修改，`allowScreenshots` 和 `reserveBrowserUseSlot` 则在 profile patch 中配置。
 
 ---
 
 ## 三、安装
 
-这个仓库里同时有插件（Node）和它的 Python 半（sidecar）。三步：
+### 从 npm 安装
+
+需要 Node.js `^22.19.0 || >=24.0.0`、DSH、Chrome/Chromium、Python 3.12+ 和 `uv`。
+
+```bash
+dsh plugin --profile desktop add @weichen96/dsh-browser-use@0.1.0
+
+# npm 包自带 bridge，但 Python 引擎是独立依赖。
+git clone https://github.com/ricardochen1996/jev-ultrafast.git /absolute/path/to/jev-ultrafast
+uv sync --project /absolute/path/to/jev-ultrafast
+```
+
+在 profile 的 `cordis.patch.yml` 中指定引擎 checkout，然后重启 DSH：
+
+```yaml
+- id: dsh-browser-use
+  config:
+    projectPath: /absolute/path/to/jev-ultrafast
+```
+
+插件会使用该 checkout 的 Python 环境；npm 不会安装 Chrome 或 Python 依赖。安装后可在 DSH 中调用 `browser_doctor` 自检。如果只是安装到 Node 项目而不是 DSH profile，可用 `npm install @weichen96/dsh-browser-use@0.1.0`；这个命令本身不会把插件注册到 DSH。
+
+如果之前安装了未发布的本地 `@rc/dsh-browser-use`，请先移除旧插件条目再安装 npm 包，不要同时启用两个 provider。内部 `id: dsh-browser-use` 和配置字段保持不变。
+
+### 从本地 checkout 安装
+
+这个仓库里同时有插件（Node）和它的 Python 半（sidecar）。先把引擎克隆到同级 `../jev-ultrafast`，再执行：
 
 ```bash
 # ① Python 环境：把引擎装进本仓库自己的 .venv（引擎默认取自同级 ../jev-ultrafast）
@@ -245,8 +271,8 @@ Problems :
 
 **在界面里改（推荐）**：插件导出了 DSH 的 `Config` schema（`lib/config.js`），Web 半又把表单挂在了两个位置，所以不用找配置文件、改完即刻生效：
 
-- **侧边栏「插件」→ 打开 `@rc/dsh-browser-use`**：开关直接画在「包含的组件」上面（插件页自身的配置区）。
-- 同一页里 **`dsh-browser-use` 那一行的标题本身就是「配置」按钮**（带 `>` 箭头，无障碍名 `配置 @rc/dsh-browser-use`），点开是同一套表单。
+- **侧边栏「插件」→ 打开 `@weichen96/dsh-browser-use`**：开关直接画在「包含的组件」上面（插件页自身的配置区）。
+- 同一页里 **`dsh-browser-use` 那一行的标题本身就是「配置」按钮**（带 `>` 箭头，无障碍名 `配置 @weichen96/dsh-browser-use`），点开是同一套表单。
 
 表单里**只有 jev 这一组**，用 shell 自己的组件画成和其它插件一样的行式布局：
 
@@ -325,7 +351,7 @@ Problems :
 | `subagentProvider` | `spawn` | `ctx.subagents` 里的 provider 名；需要它能组合**进程内**子 agent，否则退回直接模式 |
 | `maxDepth` | `0` | 子 agent 的委派深度上限；`0` 表示用 provider 自己的递归预算 |
 
-✎ = 出现在**侧边栏「插件」→ `@rc/dsh-browser-use`**（包页面或行标题里的「配置」）的表单里，改完立即生效（在下次用到该值时）；没有 ✎ 的字段只在 profile patch 里配。
+✎ = 出现在**侧边栏「插件」→ `@weichen96/dsh-browser-use`**（包页面或行标题里的「配置」）的表单里，改完立即生效（在下次用到该值时）；没有 ✎ 的字段只在 profile patch 里配。
 
 ## 六、验证（不花一分钱）
 
@@ -336,7 +362,7 @@ uv run python test/check_bridge.py   # 10 项：sidecar 端到端（stdio + 真�
 uv run python test/check_tabs.py     # 5 项：一次启动只留一个标签页
 node test/plugin.mjs      # 66 项：24 工具与拒绝（真浏览器）+ 3 元素状态渲染 + 4 缺引擎诊断 + 16 引擎配置 + 2 attach 独占 + 3 接你的 Chrome + 11 设置页表单与即时生效 + 3 在途取消
 node test/delegation.mjs  # 45 项：对话只见 browser_task、常驻子 agent 接收后续任务、释放/重启后恢复并重新挂工具、fresh 与丢失替换、一次性委派、取消与回退
-node test/inspector.mjs   # 23 项：Web 端注册 + 配置表单的注册键/字段/写回 + host 路由 + 页面可渲染
+node test/inspector.mjs   # 27 项：Web 端注册 + 配置表单的注册键/字段/写回 + host 路由 + 页面可渲染
 ```
 
 引擎不在同级目录时：
@@ -347,7 +373,7 @@ DSH_BROWSER_USE_PROJECT=/path/to/jev-ultrafast node test/plugin.mjs
 
 ## 七、与官方 `@deepseek-ai/dsh-browser-use` 的关系
 
-DSH 自带 `@deepseek-ai/dsh-browser-use`，那是"浏览器能力"的**服务定义**（只有一个注册槽，不含任何浏览器操作：没有 `dsh.bundle`、没有 `./client`、不注册工具）。本项目是**第三方 provider 实现**，包名 `@rc/dsh-browser-use`——scope 不同，两者不会互相覆盖。
+DSH 自带 `@deepseek-ai/dsh-browser-use`，那是"浏览器能力"的**服务定义**（只有一个注册槽，不含任何浏览器操作：没有 `dsh.bundle`、没有 `./client`、不注册工具）。本项目是**第三方 provider 实现**，包名 `@weichen96/dsh-browser-use`——scope 不同，两者不会互相覆盖。
 
 npm 上未 scoped 的 `dsh-browser-use` 属于**另一个项目**（Browser Use Cloud 的桥接包），与本插件无关；按名安装时认 scope，别装错。
 
@@ -378,7 +404,7 @@ npm 上未 scoped 的 `dsh-browser-use` 属于**另一个项目**（Browser Use 
 - Web 端：tab id `dsh-browser-use/inspector`、面板路由 `/browser-use/`；
 - 日志与报错前缀：`dsh-browser-use:`。
 
-**唯一必须等于包名的是 `lib/client.js` 注册的模块 id**（`__ModuleLoader__.load({ id })`），它现在是 `@rc/dsh-browser-use`——主机侧按 Loader 行的 `name`（即包名）派发，写错会在控制台见到 `bundle … loaded without registering "…"`。
+**客户端模块 id 和插件表单注册键必须使用包名**，现在是 `@weichen96/dsh-browser-use`。主机侧按 Loader 行的 `name`（包名）派发 `__ModuleLoader__.load({ id })`；不匹配时控制台会出现 `bundle … loaded without registering "…"`。`cordis.patch.yml` 的 bundle 行也使用同一包名，但内部行 id 保持不变。
 
 ## 八、工作原理
 
@@ -419,7 +445,7 @@ DSH host (Node)                                        ← 本仓库 lib/
 ## 十、卸载
 
 ```bash
-dsh plugin --profile desktop remove @rc/dsh-browser-use
+dsh plugin --profile desktop remove @weichen96/dsh-browser-use
 ```
 
 ---
