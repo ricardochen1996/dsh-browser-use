@@ -4,16 +4,21 @@
   "private": true,
   "type": "module",
   "description": "DeepSeek Harness browser provider: read a page as an indexed action space, then run one guarded operation at a time.",
+  "icon": "icon.svg",
   "license": "MIT",
   "main": "lib/index.js",
   "exports": {
     ".": {
       "default": "./lib/index.js"
     },
-    "./client": "./lib/client.js"
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
   },
   "files": [
     "lib/index.js",
+    "lib/config.js",
+    "lib/jev.js",
     "lib/engine.js",
     "lib/sessions.js",
     "lib/sidecar.js",
@@ -23,6 +28,8 @@
     "bin/doctor.mjs",
     "sidecar/bridge.py",
     "cordis.patch.yml",
+    "icon.svg",
+    "locale/*.json",
     "README.md"
   ],
   "engines": {
@@ -40,7 +47,11 @@
       "patch": "./cordis.patch.yml"
     },
     "client": {
-      "platform": "web"
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-primitives",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
     }
   },
   "keywords": [
@@ -51,5 +62,8 @@
     "browser",
     "browser-use",
     "cdp"
-  ]
+  ],
+  "dependencies": {
+    "@deepseek-ai/schemastery": "3.18.4"
+  }
 }
