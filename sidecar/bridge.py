@@ -11,7 +11,9 @@ The plugin's Node half speaks to this module over stdin/stdout; it is the Python
     hello        protocol version, interpreter, engine versions, method list
     open         start a page in a browser this sidecar owns; answer with one observation
     observe      read the current page again
-    act          one operation on one target of the named observation; refuses a page that moved
+    act          one operation on one target of the named observation; refuses a page that moved.
+                 With an ``intent`` and no operation, Jev (TypeSafe) chooses the operation and
+                 target; a TYPE_TEXT without text gets its value from the Jev text model
     screenshot   one JPEG of the visible viewport
     diagnostics  console entries, exceptions, failed and 4xx/5xx requests, drained per call
     goal         one TypeSafe run in its own tab; spends model quota
@@ -29,7 +31,8 @@ is never rolled back and never retried.
 The launch behaviour a caller depends on lives beside this module: an endpoint is discovered over
 HTTP (Chrome publishes no ``DevToolsActivePort`` for these profiles), a browser that already owns the
 profile is adopted rather than duplicated, and a profile released moments ago is retried instead of
-failing. Each has its own comment where it happens.
+failing. Each has its own comment where it happens. Attach mode without an endpoint drives the browser
+you already use: it only checks that one publishes remote debugging, then lets Browser Harness find it.
 """
 
 import json
@@ -43,7 +46,7 @@ import sys
 import time
 import urllib.request
 from collections import deque
-from importlib import import_module
+from contextlib import contextmanager
 from pathlib import Path
 
 # Browser Harness fixes its daemon name when its modules are imported, and one daemon owns one CDP
@@ -55,7 +58,7 @@ from browser_harness import _ipc, admin, helpers  # noqa: E402
 from browser_harness.admin import restart_daemon  # noqa: E402
 from browser_harness.helpers import drain_events  # noqa: E402
 from jev_ultrafast.browser import Browser, LostSession, StalePage  # noqa: E402
-from jev_ultrafast.model import action_space  # noqa: E402
+from jev_ultrafast.model import NoTextValue, action_space, choose, field_context, field_text  # noqa: E402
 
 PROTOCOL = 1
 # Diagnostics are read from the daemon's event buffer; a page can emit thousands of network events.
@@ -158,6 +161,51 @@ def devtools_endpoint(port, timeout=2.0):
             return json.loads(answer.read().decode("utf-8")).get("webSocketDebuggerUrl")
     except (OSError, ValueError):
         return None
+
+
+def discover_local_browser(profiles=None):
+    """The profile directory of the running browser you opened remote debugging on.
+
+    ``chrome://inspect/#remote-debugging`` makes a browser publish ``DevToolsActivePort`` in the
+    profile it browses with. Browser Harness finds that browser the same way when no endpoint is
+    configured, and only that path waits for Chrome's "Allow remote debugging?" prompt instead of
+    timing out on it, so this only checks what it will find and says what is missing when it would
+    find nothing. macOS refuses the read unless the app running DSH has Full Disk Access.
+    """
+    if profiles is None:
+        from browser_harness.daemon import profile_dirs
+
+        profiles = profile_dirs()
+    denied = []
+    for base in profiles:
+        path = Path(base) / "DevToolsActivePort"
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except PermissionError:
+            denied.append(path)
+            continue
+        except OSError:
+            continue
+        port = lines[0].strip() if lines else ""
+        if not port.isdigit():
+            continue
+        try:
+            socket.create_connection(("127.0.0.1", int(port)), timeout=0.5).close()
+        except OSError:
+            continue  # a browser that has since quit leaves this file behind
+        return Path(base)
+    if denied:
+        raise BridgeError(
+            "no_permission",
+            f"This process may not read {denied[0]}, so it cannot find your running browser. Give the app "
+            "that runs DSH Full Disk Access (System Settings > Privacy & Security > Full Disk Access), "
+            "then quit and reopen DSH.",
+        )
+    raise BridgeError(
+        "no_browser",
+        "No running browser has remote debugging turned on. Open chrome://inspect/#remote-debugging in "
+        "the Chrome you use and allow remote debugging, or set cdpEndpoint.",
+    )
 
 
 def clear_stale_singleton(data_dir):
@@ -360,16 +408,23 @@ def console_events(events, session):
             "failed_requests": list(failed), "error_responses": list(error_responses)}
 
 
-def request_environment():
-    """Credentials for goal mode stay out of the plugin config; the project's .env is enough."""
-    engine = Path(import_module("jev_ultrafast").__file__).resolve().parent.parent
-    path = engine / ".env"
-    if not path.exists():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if "=" in line and not line.lstrip().startswith("#"):
-            key, value = line.split("=", 1)
-            os.environ.setdefault(key.strip(), value.strip())
+ENGINE_VARIABLES = (
+    "TYPESAFE_API_KEY", "TYPESAFE_BASE_URL", "TYPESAFE_MODEL", "TYPESAFE_FALLBACK_URL",
+    "TEXT_MODEL_API_KEY", "TEXT_MODEL_BASE_URL", "TEXT_MODEL", "TEXT_MODEL_REASONING", "TEXT_MODEL_HEADERS",
+)
+
+
+@contextmanager
+def engine_environment(values):
+    """The engine's model variables for one model call, exactly as the plugin sent them, then none."""
+    for name in ENGINE_VARIABLES:
+        os.environ.pop(name, None)
+    os.environ.update({name: str(values[name]) for name in ENGINE_VARIABLES if values.get(name)})
+    try:
+        yield
+    finally:
+        for name in ENGINE_VARIABLES:
+            os.environ.pop(name, None)
 
 
 class Session:
@@ -378,6 +433,8 @@ class Session:
     def __init__(self, open_browser=Browser, launch=launch_browser):
         self.browser = None
         self.page = None
+        # What ran on this tab, in the engine's history shape: Jev reads it to avoid repeating a no-op.
+        self.history = []
         self.owned_browser = None
         self._open_browser = open_browser
         self._launch = launch
@@ -385,7 +442,15 @@ class Session:
     def _connect(self, params):
         """Point Browser Harness at a browser before anything connects to one."""
         sidecar_name()
-        endpoint = (params.get("cdpEndpoint") or os.environ.get("BU_CDP_WS") or "").strip()
+        endpoint = (params.get("cdpEndpoint") or "").strip()
+        if not endpoint and params.get("mode") == "attach":
+            # No endpoint names the browser you are already using: Browser Harness discovers it,
+            # which it only does while no endpoint is set.
+            discover_local_browser()
+            os.environ.pop("BU_CDP_WS", None)
+            os.environ.pop("BU_CDP_URL", None)
+            return
+        endpoint = endpoint or (os.environ.get("BU_CDP_WS") or "").strip()
         if endpoint:
             # Browser Harness takes a ws URL verbatim but resolves an HTTP one through /json/version,
             # and only the HTTP form survives a browser restart: Chrome puts a fresh id in the ws URL
@@ -402,7 +467,7 @@ class Session:
                 raise BridgeError("bad_request", "cdpEndpoint must be an http(s) or ws(s) URL")
             return
         if params.get("mode", "launch") != "launch":
-            raise BridgeError("no_browser", "mode 'attach' requires a cdpEndpoint")
+            raise BridgeError("bad_request", f"unknown mode {params.get('mode')!r}: use 'launch' or 'attach'")
         if self.owned_browser is not None:
             return
         env = self._launch(params.get("executablePath"), params.get("userDataDir") or DEFAULT_PROFILE,
@@ -437,15 +502,31 @@ class Session:
     def act(self, params):
         if self.browser is None or self.page is None:
             raise BridgeError("no_session", "Open a page first.")
-        action = resolve_action(self.page, params.get("operation"), params.get("target"))
+        intent = (params.get("intent") or "").strip()
+        operation, target = (params.get("operation") or "").strip().upper(), params.get("target")
+        engine_env = params.get("engine_env") or {}
+        if not operation and not intent:
+            raise BridgeError("bad_request", "act needs an operation, or an intent for Jev to choose one")
+        if operation:
+            action = resolve_action(self.page, operation, target)
         if not params.get("fingerprint"):
             raise BridgeError("bad_request", "act needs the fingerprint of the observation it refers to")
         if params["fingerprint"] != self.page["fingerprint"]:
             raise BridgeError("stale", "The page changed since that observation. Choose from the new one.",
                               page=observation(self.page))
-        text = params.get("text")
+        decision = None
+        if not operation:
+            decision = self._decide(intent, engine_env)
+            operation, target = decision["operation"], decision["target"]
+            if operation in {"DONE", "BLOCKED"}:
+                return {"decision": decision, "page": observation(self.page)}
+            action = resolve_action(self.page, operation, target)
+        text, generated = params.get("text"), None
         if action["kind"] == "fill" and not (isinstance(text, str) and text):
-            raise BridgeError("bad_request", "TYPE_TEXT needs the text to enter")
+            if not intent:
+                raise BridgeError("bad_request",
+                                  "TYPE_TEXT needs the text to enter, or an intent the Jev text model writes it from")
+            text, generated = self._write(intent, action, engine_env)
         try:
             executed = self.browser.act(action, self.page, text=text)
         except StalePage as error:
@@ -453,15 +534,55 @@ class Session:
             self.page = self.browser.observe(screenshot=False)
             raise BridgeError("stale", str(error), page=observation(self.page)) from None
         except LostSession as error:
-            self.browser, self.page = None, None
+            self.browser, self.page, self.history = None, None, []
             raise BridgeError("lost_session", str(error)) from None
         self.browser.settle(action["kind"])
+        before = self.page["fingerprint"]
         self.page = self.browser.observe(screenshot=False)
-        return {
-            "executed": {**executed, "operation": params.get("operation"), "target": params.get("target"),
-                         "label": action["label"]},
+        self.history = [*self.history, {
+            "action": action["label"], "kind": action["kind"], "text": text, "operation": operation,
+            "target": target, "page_changed": self.page["fingerprint"] != before,
+        }][-10:]
+        result = {
+            "executed": {**executed, "operation": operation, "target": target, "label": action["label"]},
             "page": observation(self.page),
         }
+        if decision is not None:
+            result["decision"] = decision
+        if generated is not None:
+            result["generated_text"] = generated
+        return result
+
+    def _decide(self, intent, engine_env):
+        """One TypeSafe choice of operation and target on the current observation. Spends model quota."""
+        if not str(engine_env.get("TYPESAFE_API_KEY") or "").strip():
+            raise BridgeError("no_credentials",
+                              "an intent needs a TypeSafe key: configure jev in the dsh-browser-use plugin config")
+        try:
+            with engine_environment(engine_env):
+                choice = choose(self.page, intent, self.history)
+        except (RuntimeError, ValueError, OSError, KeyError, TypeError) as error:
+            raise BridgeError("model_error", f"Jev could not choose an action: {error}") from None
+        operation, target = choice["operation"], choice["target"]
+        label = ""
+        if operation not in {"DONE", "BLOCKED"}:
+            label = next((a["label"] for a in self.page["actions"] if a["id"] == choice["choice"]), "")
+        return {"operation": operation, "target": target, "label": label,
+                "confidence": choice.get("confidence"), "model": choice.get("model")}
+
+    def _write(self, intent, action, engine_env):
+        """The value for one field, from the Jev text model. Spends model quota."""
+        if not str(engine_env.get("TEXT_MODEL_API_KEY") or "").strip():
+            raise BridgeError("no_credentials",
+                              "TYPE_TEXT without text needs a text-model key: configure jev in the dsh-browser-use plugin config")
+        try:
+            with engine_environment(engine_env):
+                value, helper = field_text(field_context(intent, action, self.page, self.history))
+        except NoTextValue as error:
+            raise BridgeError("no_text", str(error)) from None
+        except (RuntimeError, ValueError, OSError, KeyError, TypeError) as error:
+            raise BridgeError("model_error", f"The Jev text model could not write the value: {error}") from None
+        return value, {"value": value, "model": helper.get("model")}
 
     def screenshot(self, params):
         if self.browser is None:
@@ -485,11 +606,16 @@ class Session:
         url, goal = (params.get("url") or "").strip(), (params.get("goal") or "").strip()
         if not url or not goal:
             raise BridgeError("bad_request", "goal needs a url and a goal")
-        request_environment()
+        # Endpoints and keys come from the plugin configuration with this one request; the engine
+        # checkout's .env is deliberately not read, and nothing outlives the run.
+        engine_env = params.get("engine_env") or {}
+        if not str(engine_env.get("TYPESAFE_API_KEY") or "").strip():
+            raise BridgeError("no_credentials",
+                              "browser_goal has no TypeSafe key: configure jev in the dsh-browser-use plugin config")
         self._connect(params)
         last = None
         try:
-            with Agent(url, goal, screenshots=False) as agent:
+            with engine_environment(engine_env), Agent(url, goal, screenshots=False) as agent:
                 for state in agent.run():
                     last = state
         except NoTextValue as error:
@@ -525,6 +651,7 @@ class Session:
             except Exception:
                 pass  # a lost tab or session is already closed as far as this sidecar is concerned
         self.browser, self.page = None, None
+        self.history = []
         return {"closed": True}
 
     def shutdown(self, params):
