@@ -1,0 +1,55 @@
+{
+  "name": "@rc/dsh-browser-use",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "DeepSeek Harness browser provider: read a page as an indexed action space, then run one guarded operation at a time.",
+  "license": "MIT",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": "./lib/client.js"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/engine.js",
+    "lib/sessions.js",
+    "lib/sidecar.js",
+    "lib/tools.js",
+    "lib/inspector.js",
+    "lib/client.js",
+    "bin/doctor.mjs",
+    "sidecar/bridge.py",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "scripts": {
+    "doctor": "node bin/doctor.mjs",
+    "test": "node test/plugin.mjs && node test/delegation.mjs && node test/inspector.mjs",
+    "test:python": "uv run pytest",
+    "test:e2e": "uv run python test/check_bridge.py && uv run python test/check_tabs.py",
+    "check": "uv run ruff check . && uv run pytest -q && node test/plugin.mjs && node test/delegation.mjs && node test/inspector.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "cordis",
+    "plugin",
+    "browser",
+    "browser-use",
+    "cdp"
+  ]
+}

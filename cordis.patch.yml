@@ -1,0 +1,8 @@
+# Bundle patch layer: one host row that loads this package's main entry as a Cordis plugin.
+# The config below is the plugin's own default posture; edit the row in the profile's cordis.patch.yml
+# (id: dsh-browser-use) to point at another engine checkout, browser, or endpoint.
+- insert:
+    - id: dsh-browser-use
+      name: "@rc/dsh-browser-use"
+      config:
+        mode: launch
