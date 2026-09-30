@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Browser automation (dsh-browser-use)",
+    "description": "Drive the browser this Session owns: read a page as an indexed action space, act one freshness-checked step at a time, and hand the work to a persistent browser subagent."
+  }
+}
