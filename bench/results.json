@@ -1,0 +1,563 @@
+{
+  "meta": {
+    "goal": "Search for stays in Lisbon with free cancellation and breakfast included, then click the Casa Flora result so its booking page is open.",
+    "date": "2026-09-30",
+    "typesafe_model": "jev-1.13",
+    "text_model": "deepseek-v4.1-flash",
+    "text_reasoning": "thinking-disabled",
+    "llm_model": "deepseek-v4.1-flash",
+    "headless": true
+  },
+  "summary": {
+    "jev": {
+      "median_task_s": 10.74,
+      "median_decision_s": 1.09,
+      "verified": "3/3"
+    },
+    "llm:max": {
+      "median_task_s": 26.72,
+      "median_decision_s": 3.58,
+      "verified": "3/3"
+    },
+    "llm:low": {
+      "median_task_s": 24.62,
+      "median_decision_s": 2.77,
+      "verified": "3/3"
+    }
+  },
+  "runs": [
+    {
+      "arm": "jev",
+      "run": 1,
+      "elapsed_ms": 10741,
+      "outcome": "done",
+      "actions": 5,
+      "decisions": 6,
+      "model_ms": 8734,
+      "decide_ms": [
+        1803,
+        1949,
+        865,
+        770,
+        1139,
+        1345
+      ],
+      "write_ms": [
+        863
+      ],
+      "steps": [
+        {
+          "operation": "TYPE_TEXT",
+          "label": "Destination",
+          "text": "Lisbon"
+        },
+        {
+          "operation": "CLICK",
+          "label": "Free cancellation",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "label": "Breakfast included",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "label": "Search",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "label": "Casa Flora",
+          "text": null
+        },
+        {
+          "operation": "DONE",
+          "label": "",
+          "text": null
+        }
+      ],
+      "verified": true,
+      "final": {
+        "title": "Casa Flora — Stayfinder",
+        "city": "Lisbon",
+        "free": true,
+        "breakfast": true
+      }
+    },
+    {
+      "arm": "llm:max",
+      "run": 1,
+      "elapsed_ms": 26720,
+      "outcome": "done",
+      "actions": 5,
+      "decisions": 6,
+      "model_ms": 25009,
+      "decide_ms": [
+        8770,
+        2697,
+        2459,
+        4619,
+        2713,
+        3751
+      ],
+      "usage": {
+        "input_tokens": 9238,
+        "output_tokens": 612
+      },
+      "steps": [
+        {
+          "operation": "TYPE_TEXT",
+          "target": "4",
+          "text": "Lisbon"
+        },
+        {
+          "operation": "CLICK",
+          "target": "6",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "target": "7",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "target": "9",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "target": "10",
+          "text": null
+        },
+        {
+          "operation": "DONE"
+        }
+      ],
+      "verified": true,
+      "final": {
+        "title": "Casa Flora — Stayfinder",
+        "city": "Lisbon",
+        "free": true,
+        "breakfast": true
+      }
+    },
+    {
+      "arm": "llm:low",
+      "run": 1,
+      "elapsed_ms": 24620,
+      "outcome": "done",
+      "actions": 5,
+      "decisions": 6,
+      "model_ms": 22632,
+      "decide_ms": [
+        4763,
+        2142,
+        2343,
+        8157,
+        1978,
+        3249
+      ],
+      "usage": {
+        "input_tokens": 8990,
+        "output_tokens": 472
+      },
+      "steps": [
+        {
+          "operation": "TYPE_TEXT",
+          "target": "4",
+          "text": "Lisbon"
+        },
+        {
+          "operation": "CLICK",
+          "target": "6",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "target": "7",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "target": "9",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "target": "10",
+          "text": null
+        },
+        {
+          "operation": "DONE"
+        }
+      ],
+      "verified": true,
+      "final": {
+        "title": "Casa Flora — Stayfinder",
+        "city": "Lisbon",
+        "free": true,
+        "breakfast": true
+      }
+    },
+    {
+      "arm": "jev",
+      "run": 2,
+      "elapsed_ms": 9970,
+      "outcome": "done",
+      "actions": 5,
+      "decisions": 6,
+      "model_ms": 7982,
+      "decide_ms": [
+        1326,
+        1301,
+        854,
+        950,
+        795,
+        1044
+      ],
+      "write_ms": [
+        1712
+      ],
+      "steps": [
+        {
+          "operation": "TYPE_TEXT",
+          "label": "Destination",
+          "text": "Lisbon"
+        },
+        {
+          "operation": "CLICK",
+          "label": "Free cancellation",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "label": "Breakfast included",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "label": "Search",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "label": "Casa Flora",
+          "text": null
+        },
+        {
+          "operation": "DONE",
+          "label": "",
+          "text": null
+        }
+      ],
+      "verified": true,
+      "final": {
+        "title": "Casa Flora — Stayfinder",
+        "city": "Lisbon",
+        "free": true,
+        "breakfast": true
+      }
+    },
+    {
+      "arm": "llm:max",
+      "run": 2,
+      "elapsed_ms": 24688,
+      "outcome": "done",
+      "actions": 5,
+      "decisions": 6,
+      "model_ms": 22691,
+      "decide_ms": [
+        5836,
+        3383,
+        2516,
+        2017,
+        3409,
+        5530
+      ],
+      "usage": {
+        "input_tokens": 9708,
+        "output_tokens": 763
+      },
+      "steps": [
+        {
+          "operation": "TYPE_TEXT",
+          "target": "4",
+          "text": "Lisbon"
+        },
+        {
+          "operation": "CLICK",
+          "target": "6",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "target": "7",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "target": "9",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "target": "10",
+          "text": null
+        },
+        {
+          "operation": "DONE"
+        }
+      ],
+      "verified": true,
+      "final": {
+        "title": "Casa Flora — Stayfinder",
+        "city": "Lisbon",
+        "free": true,
+        "breakfast": true
+      }
+    },
+    {
+      "arm": "llm:low",
+      "run": 2,
+      "elapsed_ms": 18574,
+      "outcome": "done",
+      "actions": 5,
+      "decisions": 6,
+      "model_ms": 16593,
+      "decide_ms": [
+        2498,
+        2396,
+        2160,
+        3045,
+        4295,
+        2199
+      ],
+      "usage": {
+        "input_tokens": 8753,
+        "output_tokens": 429
+      },
+      "steps": [
+        {
+          "operation": "TYPE_TEXT",
+          "target": "4",
+          "text": "Lisbon"
+        },
+        {
+          "operation": "CLICK",
+          "target": "6",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "target": "7",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "target": "9",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "target": "10",
+          "text": null
+        },
+        {
+          "operation": "DONE"
+        }
+      ],
+      "verified": true,
+      "final": {
+        "title": "Casa Flora — Stayfinder",
+        "city": "Lisbon",
+        "free": true,
+        "breakfast": true
+      }
+    },
+    {
+      "arm": "jev",
+      "run": 3,
+      "elapsed_ms": 11159,
+      "outcome": "done",
+      "actions": 5,
+      "decisions": 6,
+      "model_ms": 9514,
+      "decide_ms": [
+        1727,
+        872,
+        1250,
+        2168,
+        923,
+        638
+      ],
+      "write_ms": [
+        1936
+      ],
+      "steps": [
+        {
+          "operation": "TYPE_TEXT",
+          "label": "Destination",
+          "text": "Lisbon"
+        },
+        {
+          "operation": "CLICK",
+          "label": "Free cancellation",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "label": "Breakfast included",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "label": "Search",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "label": "Casa Flora",
+          "text": null
+        },
+        {
+          "operation": "DONE",
+          "label": "",
+          "text": null
+        }
+      ],
+      "verified": true,
+      "final": {
+        "title": "Casa Flora — Stayfinder",
+        "city": "Lisbon",
+        "free": true,
+        "breakfast": true
+      }
+    },
+    {
+      "arm": "llm:max",
+      "run": 3,
+      "elapsed_ms": 31755,
+      "outcome": "done",
+      "actions": 5,
+      "decisions": 6,
+      "model_ms": 30110,
+      "decide_ms": [
+        7016,
+        4507,
+        2816,
+        3755,
+        2707,
+        9309
+      ],
+      "usage": {
+        "input_tokens": 10516,
+        "output_tokens": 892
+      },
+      "steps": [
+        {
+          "operation": "TYPE_TEXT",
+          "target": "4",
+          "text": "Lisbon"
+        },
+        {
+          "operation": "CLICK",
+          "target": "6",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "target": "7",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "target": "9",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "target": "10",
+          "text": null
+        },
+        {
+          "operation": "DONE"
+        }
+      ],
+      "verified": true,
+      "final": {
+        "title": "Casa Flora — Stayfinder",
+        "city": "Lisbon",
+        "free": true,
+        "breakfast": true
+      }
+    },
+    {
+      "arm": "llm:low",
+      "run": 3,
+      "elapsed_ms": 26946,
+      "outcome": "done",
+      "actions": 5,
+      "decisions": 6,
+      "model_ms": 24939,
+      "decide_ms": [
+        3405,
+        3330,
+        2349,
+        7156,
+        2272,
+        6427
+      ],
+      "usage": {
+        "input_tokens": 9084,
+        "output_tokens": 617
+      },
+      "steps": [
+        {
+          "operation": "TYPE_TEXT",
+          "target": "4",
+          "text": "Lisbon"
+        },
+        {
+          "operation": "CLICK",
+          "target": "6",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "target": "7",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "target": "9",
+          "text": null
+        },
+        {
+          "operation": "CLICK",
+          "target": "10",
+          "text": null
+        },
+        {
+          "operation": "DONE"
+        }
+      ],
+      "verified": true,
+      "final": {
+        "title": "Casa Flora — Stayfinder",
+        "city": "Lisbon",
+        "free": true,
+        "breakfast": true
+      }
+    }
+  ],
+  "voided": [
+    {
+      "arm": "llm:max",
+      "run": 2,
+      "attempt": 1,
+      "error": "Remote end closed connection without response"
+    }
+  ]
+}

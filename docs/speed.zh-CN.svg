@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="508" viewBox="0 0 1280 508" role="img" aria-label="Median task time with Jev on and off">
+<defs><linearGradient id="fast" x1="0" x2="1"><stop offset="0" stop-color="#f59e0b"/><stop offset="1" stop-color="#fbbf24"/></linearGradient><linearGradient id="slow" x1="0" x2="1"><stop offset="0" stop-color="#94a3b8"/><stop offset="1" stop-color="#cbd5e1"/></linearGradient></defs>
+<rect width="1280" height="508" rx="20" fill="#0f172a"/>
+<g font-family="-apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+<text x="48" y="64" font-size="28" font-weight="800" fill="#f8fafc">同一个任务，中位耗时</text>
+<text x="48" y="96" font-size="15" fill="#94a3b8">本地酒店搜索页 · 输入城市、勾两个筛选、搜索、打开结果 · 每组 3 轮交替 · 2026-09-30</text>
+<text x="48" y="166" font-size="20" font-weight="700" fill="#fde68a">开启 jev ⚡</text>
+<text x="48" y="190" font-size="13" fill="#94a3b8">TypeSafe jev-1.13 + deepseek-v4.1-flash</text>
+<rect x="430" y="146" width="181" height="44" rx="10" fill="url(#fast)"/>
+<text x="627" y="176" font-size="22" font-weight="800" fill="#fde68a">10.7 s</text>
+<text x="627" y="196" font-size="12" fill="#94a3b8">每步决策中位 1.1 s · 校验通过 3/3</text>
+<text x="48" y="262" font-size="20" font-weight="700" fill="#e2e8f0">关闭 jev</text>
+<text x="48" y="286" font-size="13" fill="#94a3b8">deepseek-v4.1-flash · reasoning low</text>
+<rect x="430" y="242" width="415" height="44" rx="10" fill="url(#slow)"/>
+<text x="861" y="272" font-size="22" font-weight="800" fill="#e2e8f0">24.6 s</text>
+<text x="861" y="292" font-size="12" fill="#94a3b8">每步决策中位 2.8 s · 校验通过 3/3 · 慢 2.3×</text>
+<text x="48" y="358" font-size="20" font-weight="700" fill="#e2e8f0">关闭 jev</text>
+<text x="48" y="382" font-size="13" fill="#94a3b8">deepseek-v4.1-flash · reasoning max（DSH 当前配置）</text>
+<rect x="430" y="338" width="450" height="44" rx="10" fill="url(#slow)"/>
+<text x="896" y="368" font-size="22" font-weight="800" fill="#e2e8f0">26.7 s</text>
+<text x="896" y="388" font-size="12" fill="#94a3b8">每步决策中位 3.6 s · 校验通过 3/3 · 慢 2.5×</text>
+<text x="48" y="478" font-size="12" fill="#64748b">计时从页面打开后的第一次决策到 DONE / finish；关闭 jev 组只带精简提示词，比真实 DSH 一轮更轻，数字偏向大模型。数据：bench/results.json</text>
+</g></svg>

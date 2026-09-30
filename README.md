@@ -1,8 +1,32 @@
+<img src="docs/banner.svg" alt="dsh-browser-use：给 DeepSeek Harness 一双快手" width="100%" />
+
 # @rc/dsh-browser-use
 
 > 给 **DeepSeek Harness** 装上"能看、能点"的浏览器：页面被读成一张**带索引的动作空间表**，模型每步只做一个操作、只对一个观测到的目标。
 
-这是一个 **DSH 插件**（host 半 + Web 端半），本身不含浏览器逻辑——它把请求交给 [Jev Ultrafast](https://github.com/browser-use/jev-ultrafast) 引擎（本机 checkout 或已安装的 Python 包）执行，因此只有**一份**循环实现。
+这是一个 **DSH 插件**（host 半 + Web 端半），本身不含浏览器逻辑——它把请求交给 [Jev Ultrafast](https://github.com/ricardochen1996/jev-ultrafast) 引擎（本机 checkout 或已安装的 Python 包）执行，因此只有**一份**循环实现。
+
+---
+
+## ⚡ 亮点：快
+
+装它的理由只有一个字——**快**。开启 jev 后，浏览器的每一步不再是主会话大模型的一整轮，而是 **Jev（TypeSafe System One）在当前动作表上的一次选择**：直接选出操作和目标，只有 `TYPE_TEXT` 要写值时才顺带调一次文本模型。省掉了每步的系统提示、历史与思考，往返自然短得多。
+
+<img src="docs/speed.zh-CN.svg" alt="同一个任务：开启 jev 约 10.7s，关闭 jev 约 24.6–26.7s" width="100%" />
+
+同一个本地酒店任务（输入城市、勾两个筛选、搜索、打开结果），jev 与"当前大模型"交替各跑 3 轮、每轮结果独立校验：
+
+| 模式 | 每步怎么决策 | 整段任务（中位） | 相对 |
+| --- | --- | --- | --- |
+| **开启 jev** ⚡ | jev-1.13 一次选择 | **10.7 s** | 基准 |
+| 关闭 jev（reasoning low） | deepseek-v4.1-flash 一整轮 | 24.6 s | **慢 2.3×** |
+| 关闭 jev（reasoning max，DSH 当前配置） | deepseek-v4.1-flash 一整轮 | 26.7 s | **慢 2.5×** |
+
+**开启 jev 后同一件事快约 2.5×**，而且每步决策的中位延迟从 2.8–3.6 s 压到 1.1 s。
+
+<img src="docs/how-it-works.svg" alt="关闭 jev：每步都是大模型一整轮；开启 jev：每步只是一次 TypeSafe 选择" width="100%" />
+
+> 计时从"页面打开后的第一次决策"到 DONE/finish。为了不夸大差距，"关闭 jev" 那组只喂了精简提示词——比真实 DSH 一轮更轻，所以真实差距只会更大。三组各 3 轮、全部通过独立校验；脚本与原始数据见 [`bench/`](bench/)（跑法：`.venv/bin/python bench/speed.py`，凭据只从环境变量读，不写进仓库）。测速用的模型就是 DSH 当前主会话模型（`deepseek-v4.1-flash`），也是 `jev.source: session` 时文本模型实际会用的路由。
 
 ---
 
@@ -28,7 +52,7 @@ dsh-browser-use/
 
 | 工具 | 作用 |
 | --- | --- |
-| `browser_task` | 把一个目标交给子 agent：它读页面、点、输入、核对，最后回报**验证过的结论**。同一 Session 的所有任务复用同一个浏览器 |
+| `browser_task` | 把一个目标交给本对话的**常驻浏览器子 agent**：第一次调用启动它，之后每次调用都把新任务发给**同一个**子 agent（它记得页面和之前做过什么）。调用立即返回，结论稍后以消息形式回到对话。`fresh: true` 换一个没有记忆的新子 agent |
 | `browser_doctor` | 自检：解释器、引擎版本、浏览器、委派状态、以及每一项缺失的修复命令 |
 
 浏览器工具挂在**被委派的子 agent 的 scope** 里（默认 6 个，`browser_goal` 关闭时）。只有它看得见、只有它能调用：
@@ -37,11 +61,20 @@ dsh-browser-use/
 | --- | --- |
 | `browser_open` | 在**本 Session 独占的浏览器**里打开页面，返回动作空间表 |
 | `browser_page` | 重新观测，给出新的观测编号 |
-| `browser_act` | 对某个观测里的某个目标执行一次操作：`CLICK` / `TYPE_TEXT` / `SELECT` / `SCROLL_UP` / `SCROLL_DOWN` / `WAIT` |
+| `browser_act` | 对某个观测里的某个目标执行一次操作：`CLICK` / `TYPE_TEXT` / `SELECT` / `SCROLL_UP` / `SCROLL_DOWN` / `WAIT`。开启 jev 后可改传 `intent`：不给 `operation` 时由 TypeSafe 在这个观测上选出操作与目标；`TYPE_TEXT` 不给 `text` 时由 jev 文本模型写入值 |
 | `browser_screenshot` | 截取可视区域（图片附件） |
 | `browser_console` | 读取控制台消息、页面异常、失败请求与 4xx/5xx |
 | `browser_goal` | 把整个目标交给 TypeSafe 策略一次跑完（**默认关闭**，会消耗付费额度） |
 | `browser_close` | 关掉标签页、浏览器与 daemon |
+
+**持续派活，不用开一堆 `browser_task`。** 插件用 DSH 原生的 continuable subagent（`ctx.subagents.startContinuable` / `sendMessage`），每个对话只有一个浏览器子 agent：
+
+- **派新任务**：再调一次 `browser_task`，任务作为消息送进同一个子 agent 的会话；它正在忙就在下一步边界插入，空闲就直接开工，已被释放就从持久化里冷启动恢复（浏览器工具自动重新挂上）。
+- **双向通信**：子 agent 只额外放开了全局的 `send_message`，可以随时给主 agent 发进度、提问、交结果；主 agent 用 `send_message` 给它补充/纠正当前任务，用 `interrupt_agent` 叫停。
+- **结果自动回来**：子 agent 干完会把结论发回来；它空闲下来时 DSH 还会给主 agent 发一条"Background subagent … finished"的通知并唤醒它，不用轮询。
+- **重启也找得回**：子 agent 用标签 `browser-task` 记在父会话的目录里，DSH 重启或 resume 后，下一次 `browser_task` / `send_message` 会找回同一个子 agent。
+
+provider 不支持 continuable（或配置 `delegateMode: one-shot`）时，退回**一次性委派**：每个任务一个子 agent，`browser_task` 等它回报后再返回。
 
 组合里没有可用的 subagent provider 时（或 `delegate: false`），插件退回**直接模式**：浏览器工具挂到组合上，对话框里自己调用——同一份实现，只是不经过子 agent。
 
@@ -82,10 +115,13 @@ Without a target: WAIT
 ### 6. Session 级隔离与回收
 每个 DSH Session 一个独立浏览器（独立 profile、独立调试端口、独立 daemon），操作串行；Session 结束自动全关。多个会话并行不会互抢标签页，也不会串状态。
 
-浏览器属于**发起任务的那个 Session**，不属于某一次委派：子 agent 来去，浏览器、登录态和标签页留下。所以连续几个 `browser_task` 是接着同一个页面继续，而不是每次重开。`mode: attach` 接来的外部浏览器**一次只留给一个 live Session**，另一个会话会被明确拒绝——两个 Session 抢同一个外部浏览器，是这层里唯一真正的数据风险。
+浏览器属于**发起任务的那个 Session**，不属于子 agent：子 agent 被释放、恢复甚至用 `fresh: true` 换掉，浏览器、登录态和标签页都留下。所以连续几个 `browser_task` 是接着同一个页面继续，而不是每次重开。`mode: attach` 接来的外部浏览器**一次只留给一个 live Session**，另一个会话会被明确拒绝——两个 Session 抢同一个外部浏览器，是这层里唯一真正的数据风险。
 
 ### 7. 不碰你正在用的浏览器
-插件自起一个专用 Chrome 实例。它**读不到**你个人 Chrome 的 profile（macOS 下 DSH 宿主进程访问该目录会被拒），也正因为如此，不会出现 Chrome 144+ 那个"允许远程调试"的授权弹窗，更不会把你的登录态卷进自动化。需要接自己的浏览器时，用 `mode: attach` + `cdpEndpoint` 显式指定。
+插件默认自起一个专用 Chrome 实例。它不碰你个人 Chrome 的 profile，所以不会出现 Chrome 144+ 那个"允许远程调试"的授权弹窗，更不会把你的登录态卷进自动化。需要接自己的浏览器时，显式切到 `mode: attach`：
+
+- **接你正在用的 Chrome（不填 `cdpEndpoint`）**：在那个 Chrome 里打开 `chrome://inspect/#remote-debugging`，允许远程调试；插件通过 Chrome 写在 profile 里的 `DevToolsActivePort` 自动找到它，在里面新开一个标签页干活，登录态直接可用。macOS 下这个文件受隐私保护，**运行 DSH 的 App 需要"完全磁盘访问权限"**（系统设置 → 隐私与安全性 → 完全磁盘访问权限，授权后重启 DSH），否则会明确报 `no_permission`。每个 DSH Session 第一次连接时 Chrome 会弹一次"允许远程调试？"，点允许即可；插件只关自己开的标签页，结束时不会关你的浏览器。引擎直接用连接层为本次运行建好的那个标签页，不会再额外开空白页；你自己打开的空白新标签页也不会被关。
+- **接一个专用的调试 Chrome（填 `cdpEndpoint`）**：`http://127.0.0.1:9333` 或 `ws://…/devtools/browser/…`，见下方配置表。
 
 每个 Session 用**自己的** profile：同一个 profile 如果已有浏览器在跑，Chrome 会把新启动"交接"给旧实例并直接退出（status 0），两个 Session 就会共用一个浏览器。因此插件按 Session 分目录；若宿主重启而浏览器还在，插件会**接管**那个实例（同一个 Session 的同一份 profile），继续用它的登录态与标签页，而不是再起一个。
 
@@ -95,26 +131,49 @@ Without a target: WAIT
 `browser_console` 直接给控制台异常与失败请求；面板实时显示同一页面。观察和操作共享同一份状态，不存在"工具说的"和"实际页面"两套事实。
 
 ### 9. 零构建
-host 半是普通 ESM，Web 半是手写的 `__ModuleLoader__` 脚本，没有 tsdown/rollup 步骤；克隆下来即可安装、即可改。
+host 半是普通 ESM，Web 半是手写的 `__ModuleLoader__` 脚本，没有 tsdown/rollup 步骤；克隆下来 `pnpm install` 一次（只为 `@deepseek-ai/schemastery`，Config schema 用），之后改完重启即可。
 
 ### 10. 能力可关
-`allowScreenshots`、`allowGoalMode`、`reserveBrowserUseSlot` 都是配置项；只想要"看图 + 点点点"就把付费策略关掉。
+`allowScreenshots`、`jev.enabled`、`reserveBrowserUseSlot` 都是配置项；只想要"看图 + 点点点"就把付费策略关掉——前两个在**侧边栏「插件」→ `@rc/dsh-browser-use`** 的配置区里点一下就行，改完立即生效。
 
 ---
 
 ## 三、安装
 
-这个仓库里同时有插件（Node）和它的 Python 半（sidecar）。两步：
+这个仓库里同时有插件（Node）和它的 Python 半（sidecar）。三步：
 
 ```bash
 # ① Python 环境：把引擎装进本仓库自己的 .venv（引擎默认取自同级 ../jev-ultrafast）
 uv sync
 
-# ② 插件本体：装进 DSH profile
+# ② Node 依赖：Config schema 用的 @deepseek-ai/schemastery（装一次即可）
+pnpm install
+
+# ③ 插件本体：装进 DSH profile
 dsh plugin --profile desktop add /absolute/path/to/dsh-browser-use
 ```
 
 或在 DSH 的 **Plugins** 页面里按路径安装。安装后**重启 DSH**（host 代码在进程内会被缓存，Web 端 bundle 在启动时装载）。
+
+**插件页上的名字、描述和图标**不是插件代码里写的，而是 DSH 从包元数据读的（`packages/boot/app-boot/src/package-meta.ts`），并且**必须能通过 Node 的 ESM 解析器解析到**——所以 `exports` 里少了这两个子路径，卡片上就只剩一个裸包名：
+
+| 显示 | 来源 | 回退 |
+| --- | --- | --- |
+| 标题 | `locale/<lang>.json` 的 `meta.title`（`en.json` 是英文回退，`zh.json` 等按语言加） | `package.json.name` |
+| 描述 | 同上的 `meta.description` | `package.json.description` |
+| 图标 | `package.json` 的 `icon` 字段（相对路径，svg/png/jpeg/webp，≤256 KiB，须在包目录内），渲染成 data URL | 默认图标 |
+
+```jsonc
+// package.json 里必须有的三处
+"icon": "icon.svg",
+"exports": {
+  ".": { "default": "./lib/index.js" },
+  "./client": "./lib/client.js",
+  "./package.json": "./package.json",     // ← 少了它，标题/描述/图标全都读不到
+  "./locale/*.json": "./locale/*.json"    // ← 少了它，本地化文案读不到
+},
+"files": ["icon.svg", "locale/*.json", "..."]
+```
 
 引擎 checkout 不在同级、或你想复用它已有的虚拟环境时，在 profile 的 `cordis.patch.yml` 里给 `id: dsh-browser-use` 那一行加配置：
 
@@ -130,12 +189,13 @@ dsh plugin --profile desktop add /absolute/path/to/dsh-browser-use
 sidecar（`sidecar/bridge.py`，随本仓库一起走）`import jev_ultrafast`，也就是上游那个引擎。插件按顺序**逐个试**下面这些解释器，用第一个能导入引擎的：
 
 1. `pythonPath` 配置（**指定了就只用它**，失败不会偷偷换别的）；
-2. 本仓库的 `.venv`（`uv sync` 的产物，引擎作为 path 依赖装在里边）；
-3. `<projectPath>/.venv/bin/python`（引擎 checkout 自己的环境）；
-4. `uv run`（`projectPath`、否则本仓库）；
-5. `python3`（要求它已经能 `import jev_ultrafast`）。
+2. `<projectPath>/.venv/bin/python`（引擎 checkout 自己的环境）；
+3. `uv run --project <projectPath>`；
+4. 本仓库的 `.venv`（`uv sync` 的产物，引擎作为 path 依赖装在里边）；
+5. `uv run`（本仓库）；
+6. `python3`（要求它已经能 `import jev_ultrafast`）。
 
-`projectPath` 的取值顺序：配置 → 环境变量 `DSH_BROWSER_USE_PROJECT`（或 `JEV_ULTRAFAST_PROJECT`）→ 同级 `../jev-ultrafast`。
+`projectPath` **只从插件配置读**（不看环境变量）。配置了它时，探测会核对每个解释器导入的 `jev_ultrafast` 到底来自哪里：不在 `projectPath` 之下的一律不用，doctor 会写明"imports jev_ultrafast from X, not from projectPath Y"。不配置时用本仓库 `.venv`（`pyproject.toml` 里指向同级 `../jev-ultrafast`）。
 
 ### 装完怎么确认"都装好了"
 
@@ -144,7 +204,7 @@ sidecar（`sidecar/bridge.py`，随本仓库一起走）`import jev_ultrafast`�
 **① 装完立刻自检（一条命令，退出码可用在脚本里）**
 
 ```bash
-npm run doctor                     # 或 node bin/doctor.mjs [/path/to/jev-ultrafast]
+npm run doctor                     # 或 node bin/doctor.mjs [/path/to/jev-ultrafast]（参数即 projectPath）
 ```
 
 ```text
@@ -181,35 +241,100 @@ Problems :
 
 ## 五、配置
 
+**在界面里改（推荐）**：插件导出了 DSH 的 `Config` schema（`lib/config.js`），Web 半又把表单挂在了两个位置，所以不用找配置文件、改完即刻生效：
+
+- **侧边栏「插件」→ 打开 `@rc/dsh-browser-use`**：开关直接画在「包含的组件」上面（插件页自身的配置区）。
+- 同一页里 **`dsh-browser-use` 那一行的标题本身就是「配置」按钮**（带 `>` 箭头，无障碍名 `配置 @rc/dsh-browser-use`），点开是同一套表单。
+
+表单里**只有 jev 这一组**，用 shell 自己的组件画成和其它插件一样的行式布局：
+
+| 表单里的字段 | 说明 |
+| --- | --- |
+| `jev.enabled` | 开放 `browser_goal` 与 `browser_act` 的 `intent`（花 TypeSafe 与文本模型额度） |
+| `jev.source` | `session` 继承主会话；`custom` 才用下面自己填的 URL/key |
+| `jev.typesafe.baseURL` / `.model` / `.apiKeyEnv` / `.apiKey` | TypeSafe 端点、模型名、key（凭据名或明文） |
+| `jev.textModel.baseURL` / `.model` / `.apiKeyEnv` / `.apiKey` | 文本模型端点、模型名、key |
+
+这些字段是 `.volatile()` 的：改完当场生效（下次 `browser_goal` 或带 `intent` 的 `browser_act` 就用新值），`apiKey` 以 `role('secret')` 提交、不出现在任何表单响应里，表单里留空就表示不动已存的 key。
+
+**其余开关都在 profile patch 里改**（改完 DSH 会重挂插件，和以前一样）：`mode`、`cdpEndpoint`、`executablePath`、`userDataDir`、`headless`、`allowScreenshots`、`requestTimeoutMs`、`delegate`、`delegateMode`、`subagentProvider`、`maxDepth`、`projectPath`、`pythonPath`、`reserveBrowserUseSlot`、`jev.typesafe.fallbackURL`、`jev.textModel.reasoning`、`jev.textModel.headers`。它们决定**有哪些工具**、跑哪个解释器、占不占组合槽位——做成表单字段等于承诺一个做不到的"立即生效"。
+
+一个已知边界：`jev.enabled` 改的是工具集合，对话自己的工具面会立刻重建；但一个已经存在的常驻浏览器子 agent 保留它被组合时那套工具，直到它被 `fresh: true` 换掉或插件被重挂（`browser_doctor` 的 Jev 行始终反映当前配置）。
+
+改完一次之后，下面的 YAML 写法仍然有效（也是 `projectPath` 这类字段唯一的入口）：
+
 写入 profile 的 `cordis.patch.yml` 中 `id: dsh-browser-use` 那一行的 `config:`：
+
+```yaml
+- id: dsh-browser-use
+  config:
+    projectPath: /absolute/path/to/jev-ultrafast
+    jev:
+      enabled: true              # 开放 browser_goal 与 browser_act 的 intent；false 时不解析、也不传任何 key
+      source: session            # session：继承主会话；custom：自己配
+      typesafe:
+        baseURL: https://opencode.ai/zen/v1/systemone
+        model: jev-1.13
+      textModel:
+        reasoning: thinking-disabled
+        headers: { x-opencode-session: dsh-harness }
+```
+
+**`source: session`（从主会话继承）**：每次调用 `browser_goal` 或带 `intent` 的 `browser_act` 时读取**当前对话正在用的模型路由**（切了模型也跟着变）——文本模型用该路由的 `baseURL`、`headers`、模型名和 key（该 provider 配置里 `apiKeyEnv` 指向的 DSH 凭据）；TypeSafe 用同一个 key，端点取 `jev.typesafe.baseURL`（TypeSafe 端点无法从聊天路由推出来）。可覆盖的只有 `typesafe.baseURL/model/fallbackURL`、`textModel.model`（留空 = 主会话的模型）、`textModel.reasoning` 和追加的 `textModel.headers`。以下情况会拒绝并给出修复提示：路由是 Anthropic 协议、没有 `baseURL`、用登录态而非 API key（如 DeepSeek 账号登录）、对话还没选模型。
+
+**`source: custom`（单独配置）**：
+
+```yaml
+    jev:
+      enabled: true
+      source: custom
+      typesafe:
+        baseURL: https://opencode.ai/zen/v1/systemone
+        model: jev-1.13
+        apiKeyEnv: OPENCODE_GATEWAY_API_KEY   # DSH 凭据（Models 页存的）或 DSH 环境变量的名字
+      textModel:
+        baseURL: https://opencode.ai/zen/go/v1
+        model: deepseek-flash
+        reasoning: thinking-disabled
+        headers: { x-opencode-session: dsh-harness }
+        apiKeyEnv: OPENCODE_GATEWAY_API_KEY   # 或 apiKey: 明文（不推荐）
+```
+
+两种模式下，`browser_goal` 与 `browser_act` 的 `intent` 所用的端点和 key **只来自插件配置/主会话**：sidecar 不读引擎 checkout 的 `.env`，DSH 进程环境里的 `TYPESAFE_*` / `TEXT_MODEL_*` 会在启动 sidecar 前被清掉；key 按次随请求传给 sidecar，只在那次运行期间可见。`browser_doctor` 显示 jev 状态和 key 来源（不显示 key 本身）。旧的 `allowGoalMode: true` 仍等价于 `jev.enabled: true`。
 
 | 字段 | 默认 | 含义 |
 | --- | --- | --- |
-| `projectPath` | 空（可用环境变量） | 引擎 checkout 位置 |
+| `projectPath` | 空（用本仓库 `.venv`） | 引擎 checkout 位置；设置后只接受从这里导入引擎的解释器 |
 | `pythonPath` | 自动 | 指定解释器（已安装引擎 wheel 时用这个） |
-| `mode` | `launch` | `launch` 自起浏览器；`attach` 接已有浏览器 |
-| `cdpEndpoint` | — | `attach` 模式的 DevTools WebSocket 地址 |
+| `mode` | `launch` | `launch` 自起浏览器；`attach` 接已在运行的浏览器 |
+| `cdpEndpoint` | — | `attach` 模式的 DevTools 地址（`http(s)://` 或 `ws(s)://`）；留空则自动接你正在用、开了 `chrome://inspect` 远程调试的 Chrome |
 | `executablePath` | 系统 Chrome | 启动哪个浏览器 |
 | `userDataDir` | 每 Session 一个（`~/.jev-ultrafast/browser/<session>`） | 专用 profile 目录 |
 | `headless` | `false` | 无窗口启动 |
 | `reserveBrowserUseSlot` | `true` | 占用 `ctx.browserUse` 单例槽（该服务被挂载时） |
-| `allowGoalMode` | `false` | 开放 `browser_goal`（花 TypeSafe 额度） |
+| `jev.enabled` ✎ | `false` | 开放 `browser_goal` 与 `browser_act` 的 `intent`（花 TypeSafe 与文本模型额度）；旧名 `allowGoalMode` |
+| `jev.source` ✎ | `session` | `session` 继承主会话的路由和 key；`custom` 用下面自己配的 `baseURL` / key |
+| `jev.typesafe` | 引擎默认 | TypeSafe 端点：`baseURL`、`model`、`fallbackURL`；`custom` 时再加 `apiKeyEnv` / `apiKey`。表单里有前两项与两个 key 字段，`fallbackURL` 只在 YAML 里 |
+| `jev.textModel` | 主会话 / 引擎默认 | 文本模型（OpenAI 兼容）：`model`、`reasoning`（`none` / `thinking-disabled`）、`headers`；`custom` 时再加 `baseURL`、`apiKeyEnv` / `apiKey`。表单里有 `baseURL` / `model` 与两个 key 字段，`reasoning` / `headers` 只在 YAML 里 |
 | `allowScreenshots` | `true` | 开放 `browser_screenshot` |
 | `requestTimeoutMs` | `180000` | 单次 sidecar 请求上限 |
 | `delegate` | `true` | 浏览器操作交给子 agent；`false` 时挂给本对话（直接模式） |
+| `delegateMode` | `persistent` | `persistent`：每个对话一个常驻浏览器子 agent，后续任务都发给它；`one-shot`：每个任务一个子 agent、等回报再返回。provider 不支持 continuable 时自动用 `one-shot` |
 | `subagentProvider` | `spawn` | `ctx.subagents` 里的 provider 名；需要它能组合**进程内**子 agent，否则退回直接模式 |
 | `maxDepth` | `0` | 子 agent 的委派深度上限；`0` 表示用 provider 自己的递归预算 |
+
+✎ = 出现在**侧边栏「插件」→ `@rc/dsh-browser-use`**（包页面或行标题里的「配置」）的表单里，改完立即生效（在下次用到该值时）；没有 ✎ 的字段只在 profile patch 里配。
 
 ## 六、验证（不花一分钱）
 
 ```bash
 npm run check             # 全部：Python 单测 + Node 检查（真浏览器，无模型调用）
-uv run pytest             # 21 项：sidecar 协议契约（离线）
+uv run pytest             # 35 项：sidecar 协议契约（离线，含 browser_act intent 的 Jev 选择/文本/拒绝）
 uv run python test/check_bridge.py   # 10 项：sidecar 端到端（stdio + 真浏览器）
 uv run python test/check_tabs.py     # 5 项：一次启动只留一个标签页
-node test/plugin.mjs      # 30 项：21 工具与拒绝（真浏览器）+ 4 缺引擎诊断 + 2 attach 独占 + 3 在途取消
-node test/delegation.mjs  # 18 项：对话只见 browser_task、子 agent 独享浏览器工具、跨委派复用同一浏览器、取消与回退
-node test/inspector.mjs   # 14 项：Web 端注册 + host 路由 + 页面可渲染
+node test/plugin.mjs      # 66 项：24 工具与拒绝（真浏览器）+ 3 元素状态渲染 + 4 缺引擎诊断 + 16 引擎配置 + 2 attach 独占 + 3 接你的 Chrome + 11 设置页表单与即时生效 + 3 在途取消
+node test/delegation.mjs  # 45 项：对话只见 browser_task、常驻子 agent 接收后续任务、释放/重启后恢复并重新挂工具、fresh 与丢失替换、一次性委派、取消与回退
+node test/inspector.mjs   # 23 项：Web 端注册 + 配置表单的注册键/字段/写回 + host 路由 + 页面可渲染
 ```
 
 引擎不在同级目录时：
@@ -240,8 +365,8 @@ npm 上未 scoped 的 `dsh-browser-use` 属于**另一个项目**（Browser Use 
 | 附加浏览器独占 | 该 provider 实例内一次只留给一个 live Session，第二个被明确拒绝（另有 2 项检查） |
 | 取消是启动前后统一的通道 | 请求级 `AbortSignal`：在途请求立即结算（kind `cancelled`），委派与 `run.dispose()` 一起收尾；**已交付给浏览器的操作不回滚** |
 | 清理失败不重用 | 关闭失败的代次被标记为不可用：下一次打开换新进程 + 新 daemon 名，并把原因写进工具结果 |
-| 子 agent 生命周期归宿主 | 用 `ctx.subagents.start()` 启动，不自己造 Agent；`toolFilter` / 子 agent scope 都用宿主机制 |
-| 工具不污染其它 agent | 浏览器工具注册在子 agent 的 scope（不是全局），子 agent 又被 `restrict({ allow: [] })` 屏蔽掉其它全局工具 |
+| 子 agent 生命周期归宿主 | 用 `ctx.subagents.startContinuable()` / `sendMessage()`（一次性模式用 `start()`）启动和续派，不自己造 Agent；`toolFilter` / 子 agent scope / 结束通知都用宿主机制 |
+| 工具不污染其它 agent | 浏览器工具注册在子 agent 的 scope（不是全局），子 agent 又被 `restrict({ allow: ['send_message'] })`（一次性模式 `allow: []`）屏蔽掉其它全局工具 |
 
 ### 内部标识仍是 `dsh-browser-use`
 
@@ -258,9 +383,9 @@ npm 上未 scoped 的 `dsh-browser-use` 属于**另一个项目**（Browser Use 
 ```text
 DSH host (Node)                                        ← 本仓库 lib/
   dsh-browser-use ── ctx.tools.register(browser_task, browser_doctor)     对话只看见这两个
-                  ── ctx.subagents.start('spawn')                         委派子 agent
+                  ── ctx.subagents.startContinuable / sendMessage('spawn') 常驻子 agent，后续任务发给它
                   │     └─ 子 agent 的 scope：browser_* 只注册在这里
-                  │        子 agent 被 restrict({ allow: [] }) 屏蔽其它全局工具
+                  │        子 agent 只放开 send_message，其它全局工具被屏蔽
                   ── ctx.systemPrompt.section(子 agent 的使用规则)
                   ── ctx.webServer.register('/browser-use')     面板路由
                   └─ 每 Session 一个 sidecar 进程，操作串行（委派之间复用）
@@ -268,7 +393,8 @@ DSH host (Node)                                        ← 本仓库 lib/
                          ▼
   sidecar/bridge.py                                    ← 本仓库 sidecar/
       ├─ Browser.observe / Browser.act / 截图 / settle       （引擎的既有执行器）
-      └─ Agent + TypeSafe 策略（仅 browser_goal 使用）
+      ├─ model.choose / field_text（browser_act 带 intent 时，单步）
+      └─ Agent + TypeSafe 策略（browser_goal，整段目标）
                          │  CDP
                          ▼
                    专用 Chrome 实例（每 Session 一份 profile）
@@ -283,10 +409,10 @@ DSH host (Node)                                        ← 本仓库 lib/
 - 改了插件代码要**重启 DSH** 才生效。
 - 不提供 `browser_eval` / 坐标输入——模型输出变成代码会破坏本项目的第一原则。
 - 页面状态不随 Session 恢复：resume/fork 会开新浏览器（DSH provider 约定如此）。
-- `browser_goal` 花的是 TypeSafe 与文本模型额度，DSH 的用量统计看不到这部分。
+- `browser_goal` 与带 `intent` 的 `browser_act` 花的是 TypeSafe 与文本模型额度，DSH 的用量统计看不到这部分。
 - **委派需要组合里有 subagent provider**（如 `@deepseek-ai/dsh-subagent-spawn-in-process`，且它能组合进程内子 agent）。没有就退回直接模式：日志 WARN、`browser_doctor` 的 `Delegation:` 行写明原因。标准 DSH base bundle 默认已挂 `spawn`；如果 provider 在插件**加载之后**才出现，要重启 DSH 才会进入委派模式。
-- 子 agent 被限制成只有浏览器工具（全局工具被它的 `allow: []` 挡住）：它能点页面，不能碰你的文件与 shell。
-- 委派出去的子 agent 是**一次性**的：任务结束即释放（浏览器留下）。resume 那个子会话不会带回浏览器工具——重新发一次 `browser_task` 即可。
+- 子 agent 被限制成只有浏览器工具加 `send_message`（其它全局工具被 allow 列表挡住）：它能点页面、能给主 agent 发消息，不能碰你的文件与 shell。
+- 常驻子 agent 的上下文会随任务累积；太长或跑偏时用 `browser_task({ fresh: true, … })` 换一个新的（旧的会被 interrupt，浏览器保留）。一次性模式下子 agent 任务结束即释放。
 
 ## 十、卸载
 
@@ -296,4 +422,4 @@ dsh plugin --profile desktop remove @rc/dsh-browser-use
 
 ---
 
-引擎：[Jev Ultrafast](https://github.com/browser-use/jev-ultrafast)（MIT）· 浏览器接入：[Browser Harness](https://github.com/browser-use/browser-harness) · 插件宿主：[DeepSeek Harness](https://github.com/deepseek-harness)
+引擎：[Jev Ultrafast](https://github.com/ricardochen1996/jev-ultrafast)（fork 自 [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast)，MIT）· 浏览器接入：[Browser Harness](https://github.com/browser-use/browser-harness) · 插件宿主：[DeepSeek Harness](https://github.com/deepseek-harness)
