@@ -80,7 +80,8 @@ jobs:
           assert.equal(packed.version, manifest.version)
           assert.equal(process.env.GITHUB_REF_NAME, `v${packed.version}`)
           assert.equal(basename(packed.filename), packed.filename)
-          const tarball = `dist/${packed.filename}`
+          // npm reads a bare "dist/x.tgz" as the GitHub shorthand github:dist/x.tgz.
+          const tarball = `./dist/${packed.filename}`
           const integrity = `sha512-${createHash('sha512').update(readFileSync(tarball)).digest('base64')}`
           assert.equal(integrity, packed.integrity, 'The downloaded artifact was modified.')
           const base = `https://registry.npmjs.org/${packed.name}`
