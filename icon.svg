@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" fill="none">
+  <!-- The window this plugin drives: a browser frame, the page it reads, and the pointer it acts with. -->
+  <rect x="5.5" y="8.5" width="37" height="31" rx="6" stroke="#4D6BFE" stroke-width="3"/>
+  <path d="M5.5 17.5h37" stroke="#4D6BFE" stroke-width="3"/>
+  <circle cx="11.5" cy="13" r="1.7" fill="#4D6BFE"/>
+  <circle cx="17" cy="13" r="1.7" fill="#9BB0FF"/>
+  <circle cx="22.5" cy="13" r="1.7" fill="#C9D4FF"/>
+  <rect x="12" y="23" width="13" height="3.6" rx="1.8" fill="#9BB0FF"/>
+  <rect x="12" y="30" width="9" height="3.6" rx="1.8" fill="#C9D4FF"/>
+  <path d="M28.5 25.5l10.2 4.6-4.3 1.5-1.5 4.3-4.4-10.4z" fill="#4D6BFE"/>
+</svg>
