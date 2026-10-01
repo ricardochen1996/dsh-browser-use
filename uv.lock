@@ -80,7 +80,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "browser-harness", specifier = "==0.1.13" },
-    { name = "jev-ultrafast", editable = "../jev-ultrafast" },
+    { name = "jev-ultrafast", path = "vendor/jev_ultrafast-0.1.0-py3-none-any.whl" },
 ]
 
 [package.metadata.requires-dev]
@@ -192,23 +192,19 @@ wheels = [
 [[package]]
 name = "jev-ultrafast"
 version = "0.1.0"
-source = { editable = "../jev-ultrafast" }
+source = { path = "vendor/jev_ultrafast-0.1.0-py3-none-any.whl" }
 dependencies = [
     { name = "browser-harness" },
     { name = "httpx", extra = ["http2"] },
+]
+wheels = [
+    { filename = "jev_ultrafast-0.1.0-py3-none-any.whl", hash = "sha256:1cf38095bdeb8ac0398b3dbe48ed36c140bd7de0a9c56889ceac7a5df561befd" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "browser-harness", specifier = "==0.1.13" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.28,<1" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pillow", specifier = ">=11,<13" },
-    { name = "pytest", specifier = ">=8.4,<9" },
-    { name = "ruff", specifier = ">=0.14,<1" },
 ]
 
 [[package]]

@@ -59,3 +59,68 @@ def test_invalid_publish_metadata_is_refused(root, key, value):
     path.write_text(json.dumps(package))
     with pytest.raises(ValueError):
         release.check_release(root)
+
+
+WHEEL = "jev_ultrafast-0.1.0-py3-none-any.whl"
+REV = "6bfef1d73475432ce31b0b58a5e136acef20602e"
+
+
+@pytest.fixture
+def engine(root):
+    vendor = root / "vendor"
+    vendor.mkdir()
+    (vendor / WHEEL).write_bytes(b"wheel")
+    digest = release.hashlib.sha256(b"wheel").hexdigest()
+    (vendor / "jev-ultrafast.json").write_text(json.dumps({"rev": REV, "version": "0.1.0", "wheel": WHEEL}))
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "sidecar"\nversion = "0.1.1"\n'
+        f'[tool.uv.sources]\njev-ultrafast = {{ path = "vendor/{WHEEL}" }}\n'
+    )
+    (root / "uv.lock").write_text(
+        '[[package]]\nname = "sidecar"\nversion = "0.1.1"\n\n'
+        f'[[package]]\nname = "jev-ultrafast"\nversion = "0.1.0"\nsource = {{ path = "vendor/{WHEEL}" }}\n'
+        f'wheels = [{{ filename = "{WHEEL}", hash = "sha256:{digest}" }}]\n'
+    )
+    package = json.loads((root / "package.json").read_text())
+    package["files"] = ["lib/", "vendor/*.whl", "vendor/jev-ultrafast.json"]
+    (root / "package.json").write_text(json.dumps(package))
+    return root
+
+
+def test_bundled_engine_agrees(engine):
+    assert release.check_release(engine) == "0.1.1"
+    assert release.check_engine(engine)["rev"] == REV
+
+
+def test_engine_shipped_by_directory_entry(engine):
+    package = json.loads((engine / "package.json").read_text())
+    package["files"] = ["lib/", "vendor"]
+    (engine / "package.json").write_text(json.dumps(package))
+    assert release.check_engine(engine)["wheel"] == WHEEL
+
+
+def edit_manifest(root, **changes):
+    path = root / "vendor" / "jev-ultrafast.json"
+    path.write_text(json.dumps({**json.loads(path.read_text()), **changes}))
+
+
+@pytest.mark.parametrize("change,match", [
+    (lambda root: (root / "vendor" / "jev-ultrafast.json").unlink(), "missing"),
+    (lambda root: edit_manifest(root, rev="main"), "revision"),
+    (lambda root: edit_manifest(root, rev=REV[:12]), "revision"),
+    (lambda root: edit_manifest(root, version="0.2.0"), "is not"),
+    (lambda root: edit_manifest(root, wheel="jev_ultrafast-0.1.1-py3-none-any.whl"), "exactly"),
+    (lambda root: (root / "vendor" / "jev_ultrafast-0.0.9-py3-none-any.whl").write_bytes(b"old"), "exactly"),
+    (lambda root: (root / "vendor" / WHEEL).write_bytes(b"rebuilt"), "uv.lock"),
+    (lambda root: (root / "pyproject.toml").write_text(
+        '[project]\nname = "sidecar"\nversion = "0.1.1"\n'
+        '[tool.uv.sources]\njev-ultrafast = { git = "https://github.com/ricardochen1996/jev-ultrafast" }\n'
+    ), "pyproject"),
+    (lambda root: (root / "package.json").write_text(json.dumps({
+        **json.loads((root / "package.json").read_text()), "files": ["lib/", "vendor/jev-ultrafast.json"],
+    })), "files"),
+])
+def test_engine_drift_is_refused(engine, change, match):
+    change(engine)
+    with pytest.raises(ValueError, match=match):
+        release.check_engine(engine)

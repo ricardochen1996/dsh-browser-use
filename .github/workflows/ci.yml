@@ -29,11 +29,17 @@ jobs:
           path: plugin
           persist-credentials: false
 
-      - name: Check out tested engine revision
+      - name: Read bundled engine revision
+        id: engine
+        run: |
+          rev=$(jq -er .rev vendor/jev-ultrafast.json)
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+
+      - name: Check out bundled engine revision
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: ricardochen1996/jev-ultrafast
-          ref: 6bfef1d73475432ce31b0b58a5e136acef20602e
+          ref: ${{ steps.engine.outputs.rev }}
           path: jev-ultrafast
           persist-credentials: false
 
@@ -58,6 +64,9 @@ jobs:
           uv sync --locked --project ../jev-ultrafast
           uv sync --locked
           google-chrome --version
+
+      - name: Check bundled engine wheel against its revision
+        run: uv run python bin/vendor_engine.py check ../jev-ultrafast
 
       - name: Check release versions
         env:
