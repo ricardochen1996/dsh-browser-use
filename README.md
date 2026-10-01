@@ -162,7 +162,7 @@ To install ahead of time, or retry after a failure, ask for `browser_doctor` wit
 node /path/to/node_modules/@weichen96/dsh-browser-use/bin/doctor.mjs --install
 ```
 
-The install is not an npm `postinstall` script: DSH installs plugins with lifecycle scripts gated off, so the plugin does it when it loads. npm does not install Chrome. If installing the package into a Node project rather than a DSH profile, use `npm install @weichen96/dsh-browser-use`; this alone does not register it with DSH. Append `@0.2.0` to either command to pin a release.
+The install is not an npm `postinstall` script: DSH installs plugins with lifecycle scripts gated off, so the plugin does it when it loads. npm does not install Chrome. If installing the package into a Node project rather than a DSH profile, use `npm install @weichen96/dsh-browser-use`; this alone does not register it with DSH. Append `@0.3.0` to either command to pin a release.
 
 If migrating from the unpublished local `@rc/dsh-browser-use` package, remove that plugin entry before adding the npm package; do not enable both providers. The internal `id: dsh-browser-use` and configuration keys remain unchanged. A profile that still sets `projectPath` to an engine checkout keeps using that checkout; remove it to use the bundled engine.
 
@@ -513,19 +513,19 @@ In GitHub, create the **`npm` environment** and allow version-tag deployments. R
 Start from a clean, up-to-date `main` checkout, with the engine checkout the tests drive (`../jev-ultrafast`) at the revision `vendor/jev-ultrafast.json` names. Keep all three version records together:
 
 ```bash
-npm version 0.2.1 --no-git-tag-version
-uv version 0.2.1 --no-sync
+npm version 0.3.1 --no-git-tag-version
+uv version 0.3.1 --no-sync
 npm run check
 npm run test:e2e
 npm run release:pack
 
 git add package.json pyproject.toml uv.lock
-git commit -m "chore(release): v0.2.1"
-git tag -a v0.2.1 -m "v0.2.1"
-git push --atomic origin main v0.2.1
+git commit -m "chore(release): v0.3.1"
+git tag -a v0.3.1 -m "v0.3.1"
+git push --atomic origin main v0.3.1
 ```
 
-Inspect the Release workflow before announcing the release. To retry a failed run, use **Re-run jobs**, or `gh workflow run release.yml --ref v0.2.1`; dispatching on a branch is rejected. Never move a published tag or reuse a published version.
+Inspect the Release workflow before announcing the release. To retry a failed run, use **Re-run jobs**, or `gh workflow run release.yml --ref v0.3.1`; dispatching on a branch is rejected. Never move a published tag or reuse a published version.
 
 `v0.1.0` records the source of the already-published npm package and predates these workflows. Pushing that tag does **not** run the new workflow, and it must not be moved to the CI commit. After pushing `main` and `v0.1.0`, its GitHub release can be backfilled without republishing npm:
 
