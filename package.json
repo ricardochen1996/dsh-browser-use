@@ -32,6 +32,7 @@
     "lib/config.js",
     "lib/jev.js",
     "lib/engine.js",
+    "lib/provision.js",
     "lib/sessions.js",
     "lib/sidecar.js",
     "lib/tools.js",
@@ -48,6 +49,8 @@
     "docs/*.svg",
     "pyproject.toml",
     "uv.lock",
+    "vendor/*.whl",
+    "vendor/jev-ultrafast.json",
     "bench/*.py",
     "bench/fixture.html",
     "bench/results.json"
@@ -57,10 +60,10 @@
   },
   "scripts": {
     "doctor": "node bin/doctor.mjs",
-    "test": "node test/plugin.mjs && node test/delegation.mjs && node test/inspector.mjs",
+    "test": "node test/plugin.mjs && node test/delegation.mjs && node test/inspector.mjs && node test/provision.mjs",
     "test:python": "uv run pytest",
     "test:e2e": "uv run python test/check_bridge.py && uv run python test/check_tabs.py",
-    "check": "uv run ruff check . && uv run pytest -q && npm run release:check && node test/plugin.mjs && node test/delegation.mjs && node test/inspector.mjs",
+    "check": "uv run ruff check . && uv run pytest -q && npm run release:check && node test/plugin.mjs && node test/delegation.mjs && node test/inspector.mjs && node test/provision.mjs",
     "release:check": "uv run python bin/check_release.py",
     "release:pack": "npm run release:check && node bin/check-package.mjs"
   },

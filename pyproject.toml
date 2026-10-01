@@ -13,9 +13,12 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-# A sibling checkout by default. Point this at your engine clone, or skip `uv sync` and give the
-# plugin an interpreter that already imports `jev_ultrafast` (config.pythonPath).
-jev-ultrafast = { path = "../jev-ultrafast", editable = true }
+# The engine ships inside this package: a wheel built from the jev-ultrafast revision named in
+# vendor/jev-ultrafast.json (`bin/vendor_engine.py update <checkout>` rebuilds it and relocks). The
+# plugin installs it by itself on first load (`uv sync --frozen` into its own `.venv`), so a user's
+# machine needs uv and PyPI, never git or an engine checkout. To run an engine clone instead, set
+# config.projectPath.
+jev-ultrafast = { path = "vendor/jev_ultrafast-0.1.0-py3-none-any.whl" }
 
 [dependency-groups]
 dev = ["pytest>=8.4,<9", "ruff>=0.14,<1"]
