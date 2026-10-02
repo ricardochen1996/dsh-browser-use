@@ -104,11 +104,125 @@ chmodSync(FAKE_UV, 0o755)
 const LOG = join(scratch, 'uv.log')
 process.env.UV = FAKE_UV
 process.env.FAKE_UV_LOG = LOG
-const useUv = mode => { process.env.FAKE_UV_MODE = mode }
+
+/**
+ * The fake Python: it answers the probe, creates a virtualenv, and runs pip as `FAKE_PY_MODE` says.
+ *
+ * The interpreter it writes into the environment is itself, so the pip that builds the environment
+ * and the interpreter the engine check probes are the same script — exactly as a real install runs.
+ */
+const FAKE_PY_SOURCE = String.raw`
+const fs = require('node:fs')
+const path = require('node:path')
+const args = process.argv.slice(2)
+fs.appendFileSync(process.env.FAKE_PY_LOG, JSON.stringify({
+  args,
+  cwd: process.cwd(),
+  kind: args[0] === '-c' ? 'probe' : args[1] ?? 'run',
+  virtualEnv: process.env.VIRTUAL_ENV ?? null,
+  uvProjectEnvironment: process.env.UV_PROJECT_ENVIRONMENT ?? null,
+  uvLocked: process.env.UV_LOCKED ?? null,
+  index: args.includes('--index-url') ? args[args.indexOf('--index-url') + 1] : null,
+  requirements: args.includes('-r') ? args[args.indexOf('-r') + 1] : null,
+}) + '\n')
+const say = line => process.stderr.write(line + '\n')
+const engine = () => JSON.stringify({
+  python: '3.12.0',
+  engine: '0.1.0',
+  enginePath: path.join(process.env.VIRTUAL_ENV ?? process.env.FAKE_PY_ENVIRONMENT ?? '.', 'lib', 'python3.12', 'site-packages', 'jev_ultrafast'),
+  browserHarness: '0.1.13',
+})
+const interpreter = environment => {
+  fs.mkdirSync(path.join(environment, 'bin'), { recursive: true })
+  const file = path.join(environment, 'bin', 'python')
+  fs.writeFileSync(file, '#!/bin/sh\nexec "' + process.execPath + '" "' + __filename + '" "$@"\n')
+  fs.chmodSync(file, 0o755)
+}
+if (args[0] === '-c') {
+  const script = args[1] ?? ''
+  if (script.includes('ensurepip')) {
+    const mode = process.env.FAKE_PY_MODE
+    const answer = {
+      python: mode === 'old' ? '3.11.9' : '3.12.14',
+      executable: process.argv[1],
+      major: 3,
+      minor: mode === 'old' ? 11 : 12,
+      venv: mode !== 'novenv',
+      pillow: '12.3.0',
+    }
+    if (mode === 'novenv') answer.why = "ModuleNotFoundError: No module named 'ensurepip'"
+    process.stdout.write(JSON.stringify(answer))
+  } else {
+    process.stdout.write(engine())
+  }
+  process.exit(0)
+}
+if (args[0] === '-m' && args[1] === 'venv') {
+  const environment = args[args.length - 1]
+  say('Using CPython 3.12.14 interpreter at: ' + process.argv[1])
+  if (process.env.FAKE_PY_MODE === 'broken') {
+    fs.mkdirSync(path.join(environment, 'bin'), { recursive: true })
+    fs.writeFileSync(path.join(environment, 'bin', 'python'), '#!/bin/sh\necho "ModuleNotFoundError: No module named \x27browser_harness\x27" >&2\nexit 1\n')
+    fs.chmodSync(path.join(environment, 'bin', 'python'), 0o755)
+  } else {
+    interpreter(environment)
+  }
+  say('Creating virtual environment at: ' + environment)
+  process.exit(0)
+}
+if (args[0] === '-m' && args[1] === 'pip') {
+  switch (process.env.FAKE_PY_MODE) {
+    case 'ok':
+      say('Collecting browser-harness==0.1.13')
+      say('Successfully installed anyio-4.15.1 browser-harness-0.1.13 jev-ultrafast-0.1.0')
+      break
+    case 'index':
+      say('ERROR: Could not find a version that satisfies the requirement websockets==15.0.1 (from versions: none)')
+      say('ERROR: No matching distribution found for websockets==15.0.1')
+      process.exitCode = 1
+      break
+    case 'hash':
+      say('ERROR: THESE PACKAGES DO NOT MATCH THE HASHES FROM THE REQUIREMENTS FILE.')
+      say('    Expected sha256 2491459e4bfc0ee8aea22dc6c4680fc0f791b7ba553446323c50d2883449d769')
+      process.exitCode = 1
+      break
+    case 'slow':
+      setTimeout(() => {
+        say('Successfully installed anyio-4.15.1 browser-harness-0.1.13 jev-ultrafast-0.1.0')
+      }, 800)
+      break
+    case 'hang':
+      say('Collecting browser-harness==0.1.13')
+      setInterval(() => {}, 1000)
+      break
+    default:
+      say('ERROR: unknown FAKE_PY_MODE')
+      process.exitCode = 2
+  }
+  if (process.env.FAKE_PY_MODE !== 'hang' && process.env.FAKE_PY_MODE !== 'slow') process.exit()
+}
+`
+const NO_PYTHON = join(scratch, 'no-such-python')
+const FAKE_PYTHON = join(scratch, 'python3')
+writeFileSync(join(scratch, 'fake-python.cjs'), FAKE_PY_SOURCE)
+writeFileSync(FAKE_PYTHON, `#!/bin/sh\nexec "${process.execPath}" "${join(scratch, 'fake-python.cjs')}" "$@"\n`)
+chmodSync(FAKE_PYTHON, 0o755)
+const PY_LOG = join(scratch, 'python.log')
+process.env.FAKE_PY_LOG = PY_LOG
+// The interpreter the installer builds with is named outright, so each check picks its own strategy:
+// `useUv` names one that does not exist and the machine is left to uv, `usePython` names the fake.
+process.env.DSH_BROWSER_USE_PYTHON = NO_PYTHON
+const useUv = mode => { process.env.DSH_BROWSER_USE_PYTHON = NO_PYTHON; process.env.FAKE_UV_MODE = mode }
+const usePython = mode => { process.env.DSH_BROWSER_USE_PYTHON = FAKE_PYTHON; process.env.FAKE_PY_MODE = mode }
 
 /** Every run of the fake uv so far. */
 const calls = () => (existsSync(LOG)
   ? readFileSync(LOG, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
+  : [])
+
+/** Every run of the fake Python so far. */
+const pythonCalls = () => (existsSync(PY_LOG)
+  ? readFileSync(PY_LOG, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
   : [])
 
 const ENGINE_PROBLEMS = ['no_engine', 'installing', 'install_failed', 'no_uv', 'no_project']
@@ -117,7 +231,8 @@ const ENGINE_PROBLEMS = ['no_engine', 'installing', 'install_failed', 'no_uv', '
 function copyPackage(name) {
   const root = join(scratch, name)
   cpSync(join(PACKAGE_ROOT, 'lib'), join(root, 'lib'), { recursive: true })
-  for (const file of ['package.json', 'sidecar/bridge.py', 'bin/doctor.mjs', 'vendor/jev-ultrafast.json']) {
+  cpSync(join(PACKAGE_ROOT, 'vendor'), join(root, 'vendor'), { recursive: true })
+  for (const file of ['package.json', 'sidecar/bridge.py', 'bin/doctor.mjs']) {
     mkdirSync(dirname(join(root, file)), { recursive: true })
     cpSync(join(PACKAGE_ROOT, file), join(root, file))
   }
@@ -168,13 +283,13 @@ async function diagnosis() {
     'a Python uv could not get gets the Python fix')
   check(/writable/u.test(provision.fixFor('error: failed to create directory `/x/.venv`: Permission denied (os error 13)')),
     'a package directory that cannot be written gets the permissions fix')
-  check(/^fix what uv reported; then retry: browser_doctor with install: true/u.test(provision.fixFor('error: something new')),
-    'anything else points at uv\u2019s own message and the retry')
+  check(/^fix what the installer reported; then retry: browser_doctor with install: true/u.test(provision.fixFor('error: something new')),
+    'anything else points at the installer\u2019s own message and the retry')
   check(provision.duration(42000) === '42s' && provision.duration(185000) === '3m 5s' && provision.duration(120000) === '2m',
     'durations read as a person reads them')
   check(provision.installArguments('/package').join(' ')
-    === 'sync --frozen --no-dev --no-install-project --inexact --python 3.12 --project /package',
-  'the install is a frozen sync of the lock, without dev tools, on Python 3.12')
+    === 'sync --frozen --no-dev --no-install-project --inexact --no-install-package pillow --python 3.12 --project /package',
+  'the install is a frozen sync of the lock, without dev tools or pillow, on Python 3.12')
 
   check(provision.findUv({ UV: join(scratch, 'no-such-uv'), PATH: dirname(FAKE_UV) }) === undefined,
     'a UV that names nothing is reported, not passed over for another uv')
@@ -258,9 +373,10 @@ async function installs() {
   const missing = directory('install-no-uv')
   process.env.UV = join(scratch, 'no-such-uv')
   const none = await provision.installEngine({ root: missing })
-  check(none.state === 'failed' && none.code === 'no_uv' && none.error.includes(`UV names ${join(scratch, 'no-such-uv')}`),
-    'a missing uv is a failure that says where it was looked for')
-  check(/^install uv: .+; then retry: /u.test(none.fix), 'its fix is the command that installs uv')
+  check(none.state === 'failed' && none.code === 'no_python' && none.error.includes(`UV names ${join(scratch, 'no-such-uv')}`),
+    'with no Python and a UV that names nothing, the failure says where uv was looked for')
+  check(/^install Python 3\.12\+ \(.+\); then retry: /u.test(none.fix) && /or uv \(/u.test(none.fix),
+    'its fix names both ways to get an installer')
   process.env.UV = FAKE_UV
   useUv('ok')
   const found = await provision.installEngine({ root: missing })
@@ -274,6 +390,114 @@ async function installs() {
     'a uv that does not finish is stopped, and the failure names what it was doing')
   check(Date.now() - started < 4000 && /HTTPS_PROXY/u.test(late.fix), 'a stuck install ends promptly, with the network fix')
   console.log(`PASS: ${passed.length - start} install checks; fake uv, no download`)
+}
+
+/** The python strategy: a Python this machine has builds the environment, and uv is never run. */
+async function pythonInstalls() {
+  const start = passed.length
+  const provision = await load(PACKAGE_ROOT, 'provision')
+  const python = await load(PACKAGE_ROOT, 'python')
+  const root = copyPackage('package-python')
+  const environment = join(root, '.venv')
+  const uvBefore = calls().length
+  const pyBefore = pythonCalls().length
+
+  usePython('ok')
+  const heard = []
+  const status = await provision.installEngine({ root, onOutput: line => heard.push(line) })
+
+  check(status.state === 'installed' && status.strategy === 'python' && status.pythonVersion === '3.12.14',
+    'a Python this machine has builds the environment, and the status names the interpreter')
+  check(calls().length === uvBefore, 'uv is not run when a Python can build the environment')
+  const runs = pythonCalls().slice(pyBefore)
+  check(runs[0].kind === 'probe' && runs[0].args[0] === '-c', 'the interpreter answers a probe before it is used')
+  check(runs[1].kind === 'venv' && runs[1].args.join(' ') === `-m venv ${environment}`,
+    'that Python creates the environment, without clearing anything that was not there')
+  const locked = runs[2]
+  check(locked.kind === 'pip' && locked.args.includes('--require-hashes') && locked.args.includes('--no-deps')
+    && locked.args.includes('--only-binary=:all:') && locked.requirements === join(root, 'vendor', 'requirements.txt'),
+  'pip installs the locked requirements by hash, without resolving dependencies')
+  check(locked.index === 'https://pypi.org/simple', 'pip reads PyPI unless the user named another index')
+  check(locked.virtualEnv === environment && locked.uvProjectEnvironment === null && locked.uvLocked === null,
+    'pip builds the environment it was pointed at, and DSH\u2019s uv variables do not leak into it')
+  const wheel = runs[3]
+  check(wheel.kind === 'pip' && wheel.args.includes('--no-index') && wheel.args.at(-1).endsWith('.whl')
+    && existsSync(wheel.args.at(-1)), 'the engine wheel this package carries is installed from disk, offline')
+  check(heard.some(line => line.includes('Successfully installed')), 'what the installer prints reaches the caller')
+  const record = JSON.parse(readFileSync(join(environment, '.dsh-browser-use.json'), 'utf8'))
+  check(record.strategy === 'python' && record.version === '3.12.14' && record.wheel.endsWith('.whl'),
+    'the environment records how it was built, for the doctor to report later')
+
+  const reported = copyPackage('package-python-report')
+  const reportedEngine = await load(reported, 'engine')
+  usePython('ok')
+  python.forgetPython()
+  const ensured = await reportedEngine.ensureEngine({ mode: 'launch', jev: { enabled: false } })
+  check(ensured.engine?.engine === '0.1.0' && ensured.interpreter.command === join(reported, '.venv', 'bin', 'python'),
+    'a browser call builds the environment with the Python on the machine and finds the engine in it')
+  check(/Install  : installed into .+ with pip \(Python 3\.12\.14\) in \d+s; pillow is skipped/u
+    .test(reportedEngine.reportText(ensured)),
+  'the report says which installer built it, and that pillow is deliberately absent')
+
+  const clearing = copyPackage('package-python-clear')
+  mkdirSync(join(clearing, '.venv'), { recursive: true })
+  usePython('ok')
+  const cleared = await provision.installEngine({ root: clearing })
+  const venv = pythonCalls().filter(call => call.kind === 'venv').at(-1)
+  check(cleared.state === 'installed' && venv.args.includes('--clear'),
+    'an environment that is already there is cleared and rebuilt, not reused half-built')
+
+  const indexed = copyPackage('package-python-index')
+  usePython('index')
+  const failed = await provision.installEngine({ root: indexed })
+  check(failed.state === 'failed' && failed.code === 'python_failed' && failed.strategy === 'python',
+    'a pip that cannot find the locked versions is a failed install, and the strategy is kept')
+  check(/No matching distribution found for websockets==15\.0\.1/u.test(failed.error), 'the failure says what pip said')
+  check(/PIP_INDEX_URL/u.test(failed.fix), 'its fix names the index setting to check')
+
+  const hashed = copyPackage('package-python-hash')
+  usePython('hash')
+  const mismatched = await provision.installEngine({ root: hashed })
+  check(mismatched.code === 'python_failed' && /THESE PACKAGES DO NOT MATCH THE HASHES/u.test(mismatched.error)
+    && /PIP_INDEX_URL/u.test(mismatched.fix), 'an index that serves another artifact is named, with the index fix')
+
+  const mirrored = copyPackage('package-python-mirror')
+  process.env.PIP_INDEX_URL = 'https://mirror.example/simple'
+  usePython('ok')
+  const mirror = await provision.installEngine({ root: mirrored })
+  delete process.env.PIP_INDEX_URL
+  check(mirror.state === 'installed'
+    && pythonCalls().filter(call => call.kind === 'pip' && call.requirements !== null).at(-1).index === 'https://mirror.example/simple',
+  'PIP_INDEX_URL in DSH\u2019s environment is the index pip reads')
+
+  const old = copyPackage('package-python-old')
+  usePython('old')
+  process.env.FAKE_UV_MODE = 'ok'
+  python.forgetPython()
+  const ancient = await provision.installEngine({ root: old })
+  check(ancient.state === 'installed' && ancient.strategy === 'uv', 'a Python older than 3.12 is passed over for uv')
+  check(ancient.pythonAttempts.some(item => /3\.11\.9 is older than 3\.12/u.test(item.failure)),
+    'and the interpreter it passed over is kept, with the reason')
+
+  const novenv = copyPackage('package-python-novenv')
+  usePython('novenv')
+  process.env.FAKE_UV_MODE = 'ok'
+  python.forgetPython()
+  const without = await provision.installEngine({ root: novenv })
+  check(without.strategy === 'uv' && without.pythonAttempts.some(item => /cannot build a virtual environment/u.test(item.failure)),
+    'a Python without venv or ensurepip is passed over, with the reason')
+
+  const payload = join(scratch, 'payload')
+  mkdirSync(join(payload, 'runtime', 'primary-runtime', 'dependencies', 'python', 'bin'), { recursive: true })
+  writeFileSync(join(payload, 'runtime', 'primary-runtime', 'dependencies', 'python', 'bin', 'python3'), '')
+  process.resourcesPath = payload
+  const shipped = python.dshPayloads()
+  delete process.resourcesPath
+  check(shipped.includes(join(payload, 'runtime', 'primary-runtime')),
+    'the Python DSH ships inside the application is looked for through the resource directory')
+  check(python.baseInterpreters({ DSH_BROWSER_USE_PYTHON: FAKE_PYTHON }).length === 1,
+    'naming an interpreter makes it the only one considered')
+  console.log(`PASS: ${passed.length - start} python-install checks; fake python, no download`)
 }
 
 /** The engine report and `ensureEngine` in a package that builds its own environment. */
@@ -348,9 +572,11 @@ async function engineInstalls() {
   process.env.UV = join(scratch, 'no-such-uv')
   const nouv = await lacking.ensureEngine(config)
   process.env.UV = FAKE_UV
-  check(nouv.problems.some(item => item.code === 'no_uv' && /uv was not found/u.test(item.message) && /^install uv: /u.test(item.fix)),
-    'without uv, the problem is uv, with the command that installs it')
-  check(lacking.reportText(nouv).includes('Install  : not possible: uv was not found'), 'the report says the install could not run')
+  check(nouv.problems.some(item => item.code === 'no_python' && /UV names .+, which is not a file/u.test(item.message)
+    && /^install Python 3\.12\+ /u.test(item.fix) && /or uv \(/u.test(item.fix)),
+  'without a Python or a usable uv, the problem names both, with the commands that install them')
+  check(lacking.reportText(nouv).includes('Install  : not possible: no Python 3.12+ and no uv'),
+    'the report says the install could not run')
 
   const brokenRoot = copyPackage('package-broken')
   const broken = await load(brokenRoot, 'engine')
@@ -422,13 +648,14 @@ async function doctors() {
     'without --install, the command reports the missing engine, installs nothing, and exits 1')
   const run = cli('--install')
   check(/Install  : installed into /u.test(run.stdout) && run.stderr.includes(`installing the browser engine into ${join(cliRoot, '.venv')}: `)
-    && run.stderr.includes('  Installed 15 packages in 120ms'), 'with --install it installs, with uv\u2019s output on stderr')
+    && run.stderr.includes('  Installed 15 packages in 120ms'), 'with --install it installs, with the installer\u2019s output on stderr')
   check(run.status === (/no Chrome or Chromium/u.test(run.stdout) ? 1 : 0), 'its exit status follows the report')
   console.log(`PASS: ${passed.length - start} doctor checks; fake uv, no browser`)
 }
 
 await diagnosis()
 await installs()
+await pythonInstalls()
 await engineInstalls()
 await cancelledWait()
 await doctors()

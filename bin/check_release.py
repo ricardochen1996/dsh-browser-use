@@ -76,6 +76,46 @@ def check_engine(root):
     return manifest
 
 
+def check_requirements(root):
+    """The pip-installable half of the lock: rendered from uv.lock, shipped, and deliberately pillow-free.
+
+    `vendor/requirements.txt` is what builds the environment on a machine that has a Python 3.12+ and
+    no uv, so it has to agree with the lock it is rendered from, and it has to travel in the tarball.
+    """
+    try:
+        import vendor_requirements
+    except ImportError:
+        raise ValueError("bin/vendor_requirements.py is missing; it renders vendor/requirements.txt.") from None
+    path = root / "vendor" / "requirements.txt"
+    if not path.exists():
+        raise ValueError("vendor/requirements.txt is missing; run bin/vendor_requirements.py update.")
+    text = path.read_text()
+    if text != vendor_requirements.render(root):
+        raise ValueError("vendor/requirements.txt no longer matches uv.lock; run bin/vendor_requirements.py update.")
+    locked = {item["name"]: item for item in tomllib.loads((root / "uv.lock").read_text())["package"]}
+    if "pillow" not in locked:
+        raise ValueError("the lock no longer carries pillow; drop the exclusion from bin/vendor_requirements.py.")
+    if any(line.startswith("pillow==") for line in text.splitlines()):
+        raise ValueError(
+            "vendor/requirements.txt must not pin pillow: this plugin never calls the helpers that use it."
+        )
+    for line in text.splitlines():
+        pinned = re.match(r"^([A-Za-z0-9._-]+)==([^\s]+)", line)
+        if pinned is None:
+            continue
+        name, pinned_version = pinned.groups()
+        if name not in locked:
+            raise ValueError(f"vendor/requirements.txt pins {name}, which uv.lock does not carry.")
+        if pinned_version != locked[name]["version"]:
+            raise ValueError(
+                f"vendor/requirements.txt pins {name} {pinned_version}, not the lock's {locked[name]['version']}."
+            )
+    files = json.loads((root / "package.json").read_text()).get("files", [])
+    if not any(fnmatch.fnmatchcase("vendor/requirements.txt", pattern) for pattern in files):
+        raise ValueError("package.json files must ship vendor/requirements.txt.")
+    return text
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag", help="Git tag being released, such as v0.1.1")
@@ -84,10 +124,12 @@ def main():
     try:
         version = check_release(root, args.tag)
         engine = check_engine(root)
+        requirements = check_requirements(root)
     except ValueError as error:
         parser.exit(1, f"Release refused: {error}\n")
     print(f"Release identity and versions agree: {PACKAGE}@{version}")
     print(f"Bundled engine agrees: {ENGINE} {engine['version']} from {engine['rev'][:12]} ({engine['wheel']})")
+    print(f"Pip requirements agree: {requirements.count('==')} packages pinned by hash from uv.lock, pillow skipped")
 
 
 if __name__ == "__main__":
