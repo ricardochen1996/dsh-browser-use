@@ -25,8 +25,8 @@ assert.equal(basename(packed.filename), packed.filename)
 const files = new Set(packed.files.map(file => file.path))
 for (const path of [
   'package.json', 'LICENSE', 'README.md', 'README.zh-CN.md', 'icon.svg', 'cordis.patch.yml',
-  'pyproject.toml', 'uv.lock', 'sidecar/bridge.py', 'bin/doctor.mjs', 'lib/provision.js',
-  'vendor/jev-ultrafast.json', `vendor/${engine.wheel}`,
+  'pyproject.toml', 'uv.lock', 'sidecar/bridge.py', 'bin/doctor.mjs', 'lib/provision.js', 'lib/python.js',
+  'vendor/jev-ultrafast.json', 'vendor/requirements.txt', `vendor/${engine.wheel}`,
   'locale/en.json', 'locale/zh.json', 'bench/results.json', 'bench/fixture.html',
   ...Object.values(manifest.exports).flatMap(value => Object.values(
     typeof value === 'string' ? { path: value } : value,
@@ -84,13 +84,15 @@ try {
     assert.ok(existsSync(join(packageRoot, 'sidecar', 'bridge.py')))
     console.log('Installed npm tarball: host, client, schema, locales, bundle and Python bridge OK.')
 
-    // What the plugin does on its first load on a machine with uv and nothing else: no checkout, no git.
+    // What the plugin does on its first load on a machine that has no engine yet: no checkout, no git.
+    // The environment is built with a Python 3.12+ this machine has (pip, by hash, from the lock's
+    // requirements) or with uv when it has none — whichever this runner offers, it must end up ready.
     const { resolveConfig } = await import(pathToFileURL(join(packageRoot, 'lib', 'config.js')))
     const engine = await import(pathToFileURL(join(packageRoot, 'lib', 'engine.js')))
     const config = resolveConfig({})
     assert.ok(engine.installable(config), 'the default configuration must let the plugin install its engine')
     const report = await engine.ensureEngine(config, {
-      onInstall: status => console.log('Installing the bundled engine into ' + status.environment + ' with uv:'),
+      onInstall: status => console.log('Installing the bundled engine into ' + status.environment + ':'),
       onOutput: line => console.log('  ' + line),
     })
     // The environment's python is a symlink to uv's interpreter: compare where it sits, not where it points.

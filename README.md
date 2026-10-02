@@ -6,7 +6,7 @@
 
 > Give **DeepSeek Harness** a browser that can *see and click*: a page is read as an **indexed action-space table**, and the model does exactly one operation on one observed target per step.
 
-This is a **DSH plugin** (a host half + a web half). It contains no browser logic of its own — it hands requests to the [Jev Ultrafast](https://github.com/ricardochen1996/jev-ultrafast) engine, so there is only **one** loop implementation. The engine ships inside the npm package as a pinned wheel, and the plugin installs it into its own Python environment with [uv](https://docs.astral.sh/uv/) the first time it loads: no engine clone, no manual Python setup.
+This is a **DSH plugin** (a host half + a web half). It contains no browser logic of its own — it hands requests to the [Jev Ultrafast](https://github.com/ricardochen1996/jev-ultrafast) engine, so there is only **one** loop implementation. The engine ships inside the npm package as a pinned wheel, and the plugin installs it into its own Python environment the first time it loads, with a Python 3.12+ the machine already has (DSH ships one) or with [uv](https://docs.astral.sh/uv/) when it has none: no engine clone, no manual Python setup, nothing to install by hand.
 
 ---
 
@@ -38,11 +38,13 @@ The same local hotel task (type a city, tick two filters, search, open a result)
 dsh-browser-use/
 ├── lib/          Node half: index.js (assembly + delegation) / tools.js (tools & delegate tool) /
 │                 sessions.js (browser ownership, attach exclusivity) / sidecar.js (process, cancel, generation) /
-│                 engine.js (interpreter & environment probing) / provision.js (installs the engine) /
+│                 engine.js (interpreter & environment probing) / provision.js + python.js (installs the engine) /
 │                 inspector.js + client.js (side panel)
-├── bin/          doctor (self-check, --install) / vendor_engine.py (rebuild & verify the bundled engine) / release checks
+├── bin/          doctor (self-check, --install) / vendor_engine.py (rebuild & verify the bundled engine) /
+│                 vendor_requirements.py (render & verify vendor/requirements.txt) / release checks
 ├── sidecar/      Python half: bridge.py — the only place that imports the engine
-├── vendor/       the engine wheel the plugin installs + jev-ultrafast.json (the engine revision it was built from)
+├── vendor/       the engine wheel the plugin installs, the hash-pinned requirements.txt pip installs,
+│                 and jev-ultrafast.json (the engine revision the wheel was built from)
 ├── test/         Node checks (plugin.mjs / delegation.mjs / inspector.mjs / provision.mjs) + Python checks (pytest + two e2e)
 ├── pyproject.toml / uv.lock   the sidecar's Python environment (engine from the vendored wheel)
 └── package.json  the DSH plugin manifest (dsh.bundle / dsh.client)
@@ -148,13 +150,13 @@ The host half is plain ESM; the web half is a hand-written `__ModuleLoader__` sc
 
 ### From npm
 
-Requires Node.js `^22.19.0 || >=24.0.0`, DSH, Chrome/Chromium and [`uv`](https://docs.astral.sh/uv/getting-started/installation/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`, or `brew install uv`). Python is not a prerequisite: uv fetches Python 3.12 when the machine has none.
+Requires Node.js `^22.19.0 || >=24.0.0`, DSH and Chrome/Chromium. **Nothing else has to be installed by hand.** DSH ships a Python 3.12 runtime for its own document tools, and the plugin builds its environment with that interpreter — or with any other Python 3.12+ on the machine, or with [`uv`](https://docs.astral.sh/uv/getting-started/installation/) when the machine has neither.
 
 ```bash
 dsh plugin --profile desktop add @weichen96/dsh-browser-use
 ```
 
-Restart DSH. On its first load the plugin installs the engine it bundles into its own environment (`<plugin>/.venv`): `uv sync --frozen` from the package's `uv.lock`, so the same versions on every machine. The log says when it starts and when the engine is ready, browser tools wait for a running install, and `browser_doctor` shows how far it got. A first install downloads about 6 MB of dependencies from PyPI, plus about 25 MB of Python 3.12 when uv finds none to use, and takes seconds to a minute; later loads only check that the engine imports. Each plugin version builds its own environment, so an upgrade installs again. Behind a proxy, set `HTTPS_PROXY` in the environment DSH runs in.
+Restart DSH. On its first load the plugin installs the engine it bundles into its own environment (`<plugin>/.venv`). It creates a virtualenv with the Python it found, then `pip` installs `vendor/requirements.txt` — the sidecar's runtime dependencies, pinned by version and by the hash of every artifact in `uv.lock` — and finally the engine wheel the package carries, from disk. A first install downloads about **1.3 MB** of wheels and takes a few seconds; when the machine has no Python 3.12+ it falls back to `uv sync --frozen` instead, which additionally fetches Python 3.12 (about 25 MB). The log says when it starts and when the engine is ready, browser tools wait for a running install, and `browser_doctor` shows how far it got. Later loads only check that the engine imports. Each plugin version builds its own environment, so an upgrade installs again. Behind a proxy, set `HTTPS_PROXY` in the environment DSH runs in.
 
 To install ahead of time, or retry after a failure, ask for `browser_doctor` with `install: true`, or run the doctor in the installed package:
 
@@ -221,22 +223,39 @@ The sidecar (`sidecar/bridge.py`, shipped with this package) does `import jev_ul
 3. `uv run --project <projectPath>`;
 4. this package's own environment, `<plugin>/.venv`, which the plugin builds itself.
 
-An interpreter the system happens to have (`python3`) is never tried: on a Mac without the developer tools it opens an installer dialog instead of answering.
+A system `python3` is never used as the sidecar's interpreter: on a Mac without the developer tools it opens an installer dialog instead of answering, and the environment the plugin builds is the one it can reproduce.
 
-**With neither `pythonPath` nor `projectPath` set, the plugin owns its environment.** When the engine doesn't import from `<plugin>/.venv`, it runs
+**With neither `pythonPath` nor `projectPath` set, the plugin owns its environment**, and builds it the cheapest way the machine allows:
+
+**1. With a Python 3.12+ that is already there — no uv, no download of an interpreter.** It looks, in order, at the Python runtime DSH ships inside the application and the copy DSH installs under its home (`~/.dsh/dsh-runtimes/*/dependencies/python`), the interpreters uv manages, Homebrew, pyenv, and `PATH`; each candidate is probed (version, `venv`, `ensurepip`) before it is used, and `/usr/bin/python3` is skipped on macOS. Then:
+
+```bash
+<python> -m venv [--clear] <plugin>/.venv
+<plugin>/.venv/bin/python -m pip install --require-hashes --no-deps --only-binary=:all: \
+  --index-url <PyPI or PIP_INDEX_URL> -r <plugin>/vendor/requirements.txt
+<plugin>/.venv/bin/python -m pip install --no-index --no-deps <plugin>/vendor/<engine wheel>
+```
+
+`vendor/requirements.txt` is rendered from `uv.lock` by `bin/vendor_requirements.py` (CI fails if the two drift apart), so `--require-hashes` gives the guarantee `--frozen` gives: the artifacts are the ones the lock recorded, byte for byte. The first two commands download about 1.3 MB. Set `DSH_BROWSER_USE_PYTHON` to a path to pin the interpreter, and `PIP_INDEX_URL` to read a mirror instead of PyPI.
+
+**2. With uv, when the machine has no Python 3.12+.** The same environment, from the same lock:
 
 ```bash
 UV_PROJECT_ENVIRONMENT=<plugin>/.venv \
-  uv sync --frozen --no-dev --no-install-project --inexact --python 3.12 --project <plugin>
+  uv sync --frozen --no-dev --no-install-project --inexact --no-install-package pillow --python 3.12 --project <plugin>
 ```
 
-when DSH loads it, before a browser call, or when asked (`browser_doctor` with `install: true`, `node <plugin>/bin/doctor.mjs --install`). `--frozen` installs exactly what `uv.lock` says, so every machine gets the same engine and dependencies. One install runs at a time: a browser call that arrives meanwhile waits for it. After a failure, calls within the next minute get the same diagnosis instead of a new attempt, and `install: true` retries at once. uv is looked up on `PATH`, then where its installer and Homebrew put it (`~/.local/bin`, `~/.cargo/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, …), since DSH started from the Dock has a minimal `PATH`; `UV` names it exactly.
+uv is looked up on `PATH`, then where its installer and Homebrew put it (`~/.local/bin`, `~/.cargo/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, …), since DSH started from the Dock has a minimal `PATH`; `UV` names it exactly.
+
+Either way the install runs when DSH loads the plugin, before a browser call, or when asked (`browser_doctor` with `install: true`, `node <plugin>/bin/doctor.mjs --install`). One install runs at a time: a browser call that arrives meanwhile waits for it. After a failure, calls within the next minute get the same diagnosis instead of a new attempt, and `install: true` retries at once. A machine with neither a Python 3.12+ nor uv is reported with the command that installs one; the doctor lists every interpreter it tried and why it passed it over.
+
+**Pillow is deliberately not installed.** Browser Harness declares it for its screenshot-annotation and video helpers; this plugin imports `browser_harness._ipc`, `admin`, `helpers` and `daemon`, captures its JPEGs over CDP itself, and runs the engine with `screenshots=False` — none of which touch PIL. Leaving it out is the difference between a 5.8 MB and a 1.3 MB first install. To put it back: `uv sync --frozen` in a checkout, or `pip install pillow==12.3.0` into `<plugin>/.venv`.
 
 **With either set, the plugin never installs**: that interpreter or checkout is yours, and the doctor names the command (`cd <projectPath> && uv sync`, or `uv pip install --python <pythonPath> <plugin>/vendor/<wheel>`). `projectPath` is **read only from the plugin config** (not from environment variables). When set, the probe verifies where each interpreter's `jev_ultrafast` is imported from: anything not under `projectPath` is rejected, and the doctor spells out "imports jev_ultrafast from X, not from projectPath Y".
 
 ### How to confirm "everything is installed"
 
-Adding the plugin only puts the engine's wheel on disk; installing it into Python needs uv and the network, at load. So the plugin doesn't assume — it **detects**, and says so clearly:
+Adding the plugin only puts the engine's wheel and the lock's requirements on disk; installing them into Python needs an interpreter (or uv) and the network, at load. So the plugin doesn't assume — it **detects**, and says so clearly:
 
 **1. Self-check (one command, exit code usable in scripts)**
 
@@ -259,20 +278,20 @@ Problems :
     fix: the next browser call installs it; to install it now: browser_doctor with install: true, or node <plugin>/bin/doctor.mjs --install
 ```
 
-With `--install`, uv's own output streams first, then:
+With `--install`, the installer's own output streams first, then:
 
 ```text
 Engine   : <plugin>/.venv/bin/python (Python 3.12.14, chosen by this package’s environment)
            jev_ultrafast 0.1.0 at <plugin>/.venv/lib/python3.12/site-packages/jev_ultrafast
            browser-harness 0.1.13
-Install  : installed into <plugin>/.venv in 9s
+Install  : installed into <plugin>/.venv with pip (Python 3.12.14) in 7s; pillow is skipped (this plugin never calls the helpers that use it)
 Sidecar  : <plugin>/sidecar/bridge.py
 Browser  : /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
 Project  : (unset)
 Status   : ready
 ```
 
-A failed install says what uv reported and the fix for that cause: uv missing → its installer command; no network → `HTTPS_PROXY`; no Python download → `uv python install 3.12` or `UV_PYTHON_INSTALL_MIRROR`; a read-only package directory → make it writable, or set `pythonPath`. Every candidate interpreter that was tried is listed with its own failure.
+A failed install says what the installer reported and the fix for that cause: no network → `HTTPS_PROXY`; an index without the locked versions, or one serving another artifact → `PIP_INDEX_URL`; a Python uv cannot get → `uv python install 3.12` or `UV_PYTHON_INSTALL_MIRROR`; a read-only package directory → make it writable, or set `pythonPath`. Every candidate interpreter that was tried is listed with its own failure, and with no Python 3.12+ and no uv the fix names both.
 
 **2. Checked at DSH startup**
 
@@ -382,9 +401,9 @@ uv run python test/check_tabs.py     # 5: a launch leaves exactly one tab
 node test/plugin.mjs      # 66: 24 tools & refusals (real browser) + 3 element-state rendering + 4 missing-engine diagnostics + 16 engine config + 2 attach exclusivity + 3 attach-to-your-Chrome + 11 settings form & immediate effect + 3 in-flight cancel
 node test/delegation.mjs  # 70: conversation sees only browser_task(+_status), persistent subagent takes later tasks, restores & re-mounts tools after release/restart, status & wait (settle, timeout, user, subagent message, cancel, silent exit), fresh & lost replacement, one-shot delegation, cancel & fallback
 node test/inspector.mjs   # 27: web-half registration + config form registration keys/fields/write-back + host routing + page renders
-node test/provision.mjs   # 70: 14 uv lookup & failure diagnosis + 24 install (one at a time, failure → fix, retry window, no uv, timeout) + 21 install through the engine check & report + 4 cancelled wait + 7 doctor tool & CLI (fake uv, no download)
-npm run release:check     # npm/Python/uv.lock version, publishing metadata and bundled engine (wheel, manifest, lock hashes) agreement
-npm run release:pack      # inspect and install the exact npm tarball, then install its bundled engine with uv; writes dist/ (no publishing)
+node test/provision.mjs   # 93: 14 uv lookup & failure diagnosis + 24 install (one at a time, failure → fix, retry window, no uv, timeout) + 23 the Python path (probe, venv, hash-pinned pip, wheel, index, fallbacks) + 21 install through the engine check & report + 4 cancelled wait + 7 doctor tool & CLI (fake uv and fake python, no download)
+npm run release:check     # npm/Python/uv.lock version, publishing metadata, bundled engine (wheel, manifest, lock hashes) and vendor/requirements.txt agreement
+npm run release:pack      # inspect and install the exact npm tarball, then let it build its own engine environment; writes dist/ (no publishing)
 ```
 
 The Node checks drive an engine checkout, not the bundled wheel. When it isn't the sibling `../jev-ultrafast`:
@@ -451,12 +470,12 @@ DSH host (Node)                                        ← this repo's lib/
                    a dedicated Chrome instance (one profile per Session)
 
 engine = jev_ultrafast (a separate repo; a wheel of it ships in vendor/), imported by the sidecar
-         from <plugin>/.venv, which the plugin builds with uv when it first loads.
+         from <plugin>/.venv, which the plugin builds when it first loads.
 ```
 
 ## 9. Limits
 
-- **The engine is installed when the plugin loads, not by the package manager**: DSH installs plugins with lifecycle scripts gated off, so the plugin installs the engine it bundles itself (section 4). That needs uv and, the first time, network access to PyPI (and to Python's downloads when uv finds no Python 3.12). Until it finishes, browser calls wait; a failure names its fix. With `projectPath` or `pythonPath` set, the environment is yours and the plugin only hands you the command.
+- **The engine is installed when the plugin loads, not by the package manager**: DSH installs plugins with lifecycle scripts gated off, so the plugin installs the engine it bundles itself (section 4). That needs a Python 3.12+ or uv — both are looked for, not assumed — and, the first time, about 1.3 MB from PyPI (plus Python 3.12 and the locked wheels when uv has to fetch them). Until it finishes, browser calls wait; a failure names its fix. With `projectPath` or `pythonPath` set, the environment is yours and the plugin only hands you the command.
 - Depends on the Python engine; when the engine is unavailable, the browser tools refuse with a fix command (`browser_doctor` is always available).
 - The `browserUse` slot is exclusive (only when that service is mounted).
 - Changing the plugin code requires a **DSH restart** to take effect.
@@ -475,12 +494,13 @@ dsh plugin --profile desktop remove @weichen96/dsh-browser-use
 
 ## 11. CI and releases
 
-[`ci.yml`](https://github.com/ricardochen1996/dsh-browser-use/blob/main/.github/workflows/ci.yml) runs on pull requests and pushes to `main`. It tests Node 22.19.0 and 24.21.0 with Python 3.12 on Ubuntu 24.04, using the runner's Chrome. Actions and package-manager versions are pinned; pnpm and uv install from their lockfiles. The tests drive the engine checked out at the revision `vendor/jev-ultrafast.json` names, and CI rebuilds the bundled wheel from that revision and fails if any file differs (`bin/vendor_engine.py check`). The checks include lint, unit tests, real-browser integration, matching npm/Python versions, the bundled engine's wheel, manifest and lock hashes, generated chart consistency, and an isolated install of the actual npm tarball together with its engine. No model credentials are needed.
+[`ci.yml`](https://github.com/ricardochen1996/dsh-browser-use/blob/main/.github/workflows/ci.yml) runs on pull requests and pushes to `main`. It tests Node 22.19.0 and 24.21.0 with Python 3.12 on Ubuntu 24.04, using the runner's Chrome. Actions and package-manager versions are pinned; pnpm and uv install from their lockfiles. The tests drive the engine checked out at the revision `vendor/jev-ultrafast.json` names, and CI rebuilds the bundled wheel from that revision and fails if any file differs (`bin/vendor_engine.py check`). The checks include lint, unit tests, real-browser integration, matching npm/Python versions, the bundled engine's wheel, manifest and lock hashes, `vendor/requirements.txt` against `uv.lock`, generated chart consistency, and an isolated install of the actual npm tarball together with its engine. No model credentials are needed.
 
-To adopt engine changes, rebuild the bundled wheel deliberately from a clean engine checkout at the commit to adopt, and commit `vendor/`, `pyproject.toml` and `uv.lock` together:
+To adopt engine changes, rebuild the bundled wheel deliberately from a clean engine checkout at the commit to adopt, and commit `vendor/`, `pyproject.toml` and `uv.lock` together — then re-render the requirements that pip installs:
 
 ```bash
 uv run python bin/vendor_engine.py update ../jev-ultrafast   # build the wheel from its HEAD, write the manifest, relock
+uv run python bin/vendor_requirements.py update              # re-render vendor/requirements.txt from the new lock
 uv run python bin/vendor_engine.py check ../jev-ultrafast    # what CI runs: the wheel holds exactly that revision
 ```
 
@@ -519,7 +539,7 @@ npm run check
 npm run test:e2e
 npm run release:pack
 
-git add package.json pyproject.toml uv.lock
+git add package.json pyproject.toml uv.lock vendor/requirements.txt
 git commit -m "chore(release): v0.3.1"
 git tag -a v0.3.1 -m "v0.3.1"
 git push --atomic origin main v0.3.1

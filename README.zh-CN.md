@@ -6,7 +6,7 @@
 
 > 给 **DeepSeek Harness** 装上"能看、能点"的浏览器：页面被读成一张**带索引的动作空间表**，模型每步只做一个操作、只对一个观测到的目标。
 
-这是一个 **DSH 插件**（host 半 + Web 端半），本身不含浏览器逻辑——它把请求交给 [Jev Ultrafast](https://github.com/ricardochen1996/jev-ultrafast) 引擎执行，因此只有**一份**循环实现。引擎以固定版本的 wheel 随 npm 包一起发布，插件第一次加载时用 [uv](https://docs.astral.sh/uv/) 把它装进自己的 Python 环境：不用克隆引擎，也不用手动配 Python。
+这是一个 **DSH 插件**（host 半 + Web 端半），本身不含浏览器逻辑——它把请求交给 [Jev Ultrafast](https://github.com/ricardochen1996/jev-ultrafast) 引擎执行，因此只有**一份**循环实现。引擎以固定版本的 wheel 随 npm 包一起发布，插件第一次加载时把它装进自己的 Python 环境：用机器上已有的 Python 3.12+（DSH 自带一个），机器上确实没有时才用 [uv](https://docs.astral.sh/uv/)。不用克隆引擎，不手动配 Python，也不需要预先安装任何工具。
 
 ---
 
@@ -38,11 +38,13 @@
 dsh-browser-use/
 ├── lib/          Node 半：index.js（装配 + 委派）/ tools.js（工具与委派工具）/
 │                 sessions.js（浏览器所有权、attach 独占）/ sidecar.js（进程、取消、代次）/
-│                 engine.js（解释器与环境探测）/ provision.js（安装引擎）/
+│                 engine.js（解释器与环境探测）/ provision.js + python.js（安装引擎）/
 │                 inspector.js + client.js（右侧栏面板）
-├── bin/          doctor（自检，--install 安装）/ vendor_engine.py（重建并核对随包引擎）/ 发版检查
+├── bin/          doctor（自检，--install 安装）/ vendor_engine.py（重建并核对随包引擎）/
+│                 vendor_requirements.py（生成并核对 vendor/requirements.txt）/ 发版检查
 ├── sidecar/      Python 半：bridge.py —— 唯一 import 引擎的地方
-├── vendor/       插件要安装的引擎 wheel + jev-ultrafast.json（它由引擎哪个 revision 构建）
+├── vendor/       插件要安装的引擎 wheel、pip 按哈希安装的 requirements.txt，
+│                 以及 jev-ultrafast.json（wheel 由引擎哪个 revision 构建）
 ├── test/         Node 检查（plugin.mjs / delegation.mjs / inspector.mjs / provision.mjs）+ Python 检查（pytest + 两个 e2e）
 ├── pyproject.toml / uv.lock   sidecar 的 Python 环境（引擎取自 vendor/ 里的 wheel）
 └── package.json  DSH 插件清单（dsh.bundle / dsh.client）
@@ -148,13 +150,13 @@ host 半是普通 ESM，Web 半是手写的 `__ModuleLoader__` 脚本，没有 t
 
 ### 从 npm 安装
 
-需要 Node.js `^22.19.0 || >=24.0.0`、DSH、Chrome/Chromium 和 [`uv`](https://docs.astral.sh/uv/getting-started/installation/)（`curl -LsSf https://astral.sh/uv/install.sh | sh`，或 `brew install uv`）。Python 不是前置条件：机器上没有时，uv 会自己下载 Python 3.12。
+需要 Node.js `^22.19.0 || >=24.0.0`、DSH 和 Chrome/Chromium。**其余都不用你自己装。** DSH 为自家的文档工具带了一个 Python 3.12 运行时，插件就用它构建环境；也可以用机器上任何其他 Python 3.12+；两者都没有时才用 [`uv`](https://docs.astral.sh/uv/getting-started/installation/)。
 
 ```bash
 dsh plugin --profile desktop add @weichen96/dsh-browser-use
 ```
 
-重启 DSH。插件第一次加载时，会把随包的引擎装进它自己的环境（`<plugin>/.venv`）：按包里的 `uv.lock` 执行 `uv sync --frozen`，所以每台机器装到的版本都一样。日志会写明安装何时开始、引擎何时就绪；安装进行中时浏览器工具会等它完成，`browser_doctor` 能看到装到哪一步。第一次安装要从 PyPI 下载约 6 MB 的依赖，uv 找不到可用的 Python 3.12 时再加约 25 MB 的 Python，耗时几秒到一分钟；之后每次加载只检查引擎能否 import。每个插件版本有各自的环境，所以升级后会重新安装一次。需要代理时，在 DSH 运行的环境里设置 `HTTPS_PROXY`。
+重启 DSH。插件第一次加载时，会把随包的引擎装进它自己的环境（`<plugin>/.venv`）：先用找到的 Python 建一个 virtualenv，再用 `pip` 安装 `vendor/requirements.txt`——sidecar 的运行时依赖，版本和每个产物的哈希都取自 `uv.lock`——最后从磁盘装上随包的引擎 wheel。第一次安装只下载约 **1.3 MB** 的 wheel，几秒钟完成；机器上确实没有 Python 3.12+ 时才退回 `uv sync --frozen`，那条路会额外下载约 25 MB 的 Python 3.12。日志会写明安装何时开始、引擎何时就绪；安装进行中时浏览器工具会等它完成，`browser_doctor` 能看到装到哪一步。之后每次加载只检查引擎能否 import。每个插件版本有各自的环境，所以升级后会重新安装一次。需要代理时，在 DSH 运行的环境里设置 `HTTPS_PROXY`。
 
 想提前装好、或在失败后重试：让模型调用 `browser_doctor` 并带上 `install: true`，或在已安装的包里运行 doctor：
 
@@ -221,22 +223,39 @@ sidecar（`sidecar/bridge.py`，随本包一起走）`import jev_ultrafast`，�
 3. `uv run --project <projectPath>`；
 4. 本包自己的环境 `<plugin>/.venv`，由插件自己构建。
 
-系统里碰巧有的解释器（`python3`）一概不试：在没装开发者工具的 Mac 上，它会弹出安装对话框，而不是回答。
+系统里碰巧有的 `python3` 不会被当作 sidecar 的解释器：在没装开发者工具的 Mac 上，它会弹出安装对话框，而不是回答；而且插件自己构建的环境才是它能够复现的那个。
 
-**`pythonPath` 和 `projectPath` 都没设时，环境归插件自己管。** 引擎无法从 `<plugin>/.venv` 导入时，插件会执行
+**`pythonPath` 和 `projectPath` 都没设时，环境归插件自己管**，并按机器上最省事的方式构建：
+
+**1. 机器上已经有 Python 3.12+——不用 uv，也不下载解释器。** 插件按顺序查看：DSH 应用自带的 Python 运行时、DSH 装在自己主目录下的那份（`~/.dsh/dsh-runtimes/*/dependencies/python`）、uv 管理的解释器、Homebrew、pyenv，以及 `PATH`；每个候选都会先探测（版本、`venv`、`ensurepip`）再使用，macOS 上跳过 `/usr/bin/python3`。然后执行：
+
+```bash
+<python> -m venv [--clear] <plugin>/.venv
+<plugin>/.venv/bin/python -m pip install --require-hashes --no-deps --only-binary=:all: \
+  --index-url <PyPI 或 PIP_INDEX_URL> -r <plugin>/vendor/requirements.txt
+<plugin>/.venv/bin/python -m pip install --no-index --no-deps <plugin>/vendor/<engine wheel>
+```
+
+`vendor/requirements.txt` 由 `bin/vendor_requirements.py` 从 `uv.lock` 生成（两者不一致时 CI 直接失败），所以 `--require-hashes` 提供的保证和 `--frozen` 一样：装的就是 lock 记录的那些产物，一字节不差。前两条命令共下载约 1.3 MB。可以用 `DSH_BROWSER_USE_PYTHON` 指定解释器路径，用 `PIP_INDEX_URL` 走镜像而不是 PyPI。
+
+**2. 机器上没有 Python 3.12+ 时用 uv。** 同一份 lock，构建出同一个环境：
 
 ```bash
 UV_PROJECT_ENVIRONMENT=<plugin>/.venv \
-  uv sync --frozen --no-dev --no-install-project --inexact --python 3.12 --project <plugin>
+  uv sync --frozen --no-dev --no-install-project --inexact --no-install-package pillow --python 3.12 --project <plugin>
 ```
 
-时机是 DSH 加载插件时、浏览器调用之前，或被要求时（`browser_doctor` 带 `install: true`、`node <plugin>/bin/doctor.mjs --install`）。`--frozen` 严格按 `uv.lock` 安装，所以每台机器装到的引擎和依赖都一样。同一时间只跑一次安装：期间到来的浏览器调用会等它完成。失败后一分钟内的调用直接拿到同一份诊断、不重新尝试，`install: true` 则立即重试。uv 先在 `PATH` 里找，再去它的安装器和 Homebrew 放的位置找（`~/.local/bin`、`~/.cargo/bin`、`/opt/homebrew/bin`、`/usr/local/bin` 等），因为从 Dock 启动的 DSH 的 `PATH` 很短；`UV` 环境变量可以精确指定。
+uv 先在 `PATH` 里找，再去它的安装器和 Homebrew 放的位置找（`~/.local/bin`、`~/.cargo/bin`、`/opt/homebrew/bin`、`/usr/local/bin` 等），因为从 Dock 启动的 DSH 的 `PATH` 很短；`UV` 环境变量可以精确指定。
+
+两种情况都在这些时机安装：DSH 加载插件时、浏览器调用之前，或被要求时（`browser_doctor` 带 `install: true`、`node <plugin>/bin/doctor.mjs --install`）。同一时间只跑一次安装：期间到来的浏览器调用会等它完成。失败后一分钟内的调用直接拿到同一份诊断、不重新尝试，`install: true` 则立即重试。既没有 Python 3.12+ 也没有 uv 时，报错会给出安装其中之一的命令；doctor 会逐条列出试过的解释器以及被跳过的原因。
+
+**pillow 是故意不装的。** Browser Harness 声明它，是为了自己的截图标注和视频辅助函数；本插件只 import `browser_harness._ipc`、`admin`、`helpers` 和 `daemon`，截图直接走 CDP 拿 JPEG，引擎也以 `screenshots=False` 运行——这些路径都不会碰 PIL。省掉它，第一次安装就从 5.8 MB 降到 1.3 MB。想装回来：在 checkout 里 `uv sync --frozen`，或往 `<plugin>/.venv` 里 `pip install pillow==12.3.0`。
 
 **设置了其中任何一项，插件就不安装**：那个解释器或 checkout 归你管，doctor 会给出要执行的命令（`cd <projectPath> && uv sync`，或 `uv pip install --python <pythonPath> <plugin>/vendor/<wheel>`）。`projectPath` **只从插件配置读**（不看环境变量）。配置了它时，探测会核对每个解释器导入的 `jev_ultrafast` 到底来自哪里：不在 `projectPath` 之下的一律不用，doctor 会写明"imports jev_ultrafast from X, not from projectPath Y"。
 
 ### 装完怎么确认"都装好了"
 
-添加插件只是把引擎的 wheel 放到了磁盘上；把它装进 Python 需要 uv 和网络，发生在加载时。所以插件不假设、而是**检测**，并把结果说清楚：
+添加插件只是把引擎的 wheel 和 lock 里的依赖清单放到了磁盘上；把它们装进 Python 需要一个解释器（或 uv）和网络，发生在加载时。所以插件不假设、而是**检测**，并把结果说清楚：
 
 **① 自检（一条命令，退出码可用在脚本里）**
 
@@ -259,20 +278,20 @@ Problems :
     fix: the next browser call installs it; to install it now: browser_doctor with install: true, or node <plugin>/bin/doctor.mjs --install
 ```
 
-带 `--install` 时，先输出 uv 自己的日志，然后是：
+带 `--install` 时，先输出安装器自己的日志，然后是：
 
 ```text
 Engine   : <plugin>/.venv/bin/python (Python 3.12.14, chosen by this package’s environment)
            jev_ultrafast 0.1.0 at <plugin>/.venv/lib/python3.12/site-packages/jev_ultrafast
            browser-harness 0.1.13
-Install  : installed into <plugin>/.venv in 9s
+Install  : installed into <plugin>/.venv with pip (Python 3.12.14) in 7s; pillow is skipped (this plugin never calls the helpers that use it)
 Sidecar  : <plugin>/sidecar/bridge.py
 Browser  : /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
 Project  : (unset)
 Status   : ready
 ```
 
-安装失败时，会写出 uv 报告的原因和针对该原因的修复：没有 uv → 给出 uv 的安装命令；网络不通 → `HTTPS_PROXY`；下载不了 Python → `uv python install 3.12` 或 `UV_PYTHON_INSTALL_MIRROR`；包目录只读 → 让它可写，或设置 `pythonPath`。试过的每个候选解释器都会逐条列出各自的失败原因。
+安装失败时，会写出安装器报告的原因和针对该原因的修复：网络不通 → `HTTPS_PROXY`；索引里没有锁定的版本、或索引给的是另一个产物 → `PIP_INDEX_URL`；uv 拿不到 Python → `uv python install 3.12` 或 `UV_PYTHON_INSTALL_MIRROR`；包目录只读 → 让它可写，或设置 `pythonPath`。试过的每个候选解释器都会逐条列出各自的失败原因；既没有 Python 3.12+ 也没有 uv 时，修复里两种办法都会给出。
 
 **② DSH 启动时就检查**
 
@@ -382,9 +401,9 @@ uv run python test/check_tabs.py     # 5 项：一次启动只留一个标签页
 node test/plugin.mjs      # 66 项：24 工具与拒绝（真浏览器）+ 3 元素状态渲染 + 4 缺引擎诊断 + 16 引擎配置 + 2 attach 独占 + 3 接你的 Chrome + 11 设置页表单与即时生效 + 3 在途取消
 node test/delegation.mjs  # 70 项：对话只见 browser_task(+_status)、常驻子 agent 接收后续任务、释放/重启后恢复并重新挂工具、状态与等待（结算、超时、用户发话、子 agent 来信、取消、静默退出）、fresh 与丢失替换、一次性委派、取消与回退
 node test/inspector.mjs   # 27 项：Web 端注册 + 配置表单的注册键/字段/写回 + host 路由 + 页面可渲染
-node test/provision.mjs   # 70 项：14 uv 查找与失败诊断 + 24 安装（同时只跑一次、失败→修复、重试窗口、没有 uv、超时）+ 21 经引擎检查的安装与报告 + 4 取消等待 + 7 doctor 工具与命令行（假 uv，不下载）
-npm run release:check     # 核对 npm/Python/uv.lock 版本、发布元数据，以及随包引擎（wheel、清单、lock 哈希）一致
-npm run release:pack      # 检查并独立安装实际 npm 包，再用 uv 装上它带的引擎，输出到 dist/，不会发布
+node test/provision.mjs   # 93 项：14 uv 查找与失败诊断 + 24 安装（同时只跑一次、失败→修复、重试窗口、没有 uv、超时）+ 23 Python 路径（探测、venv、按哈希 pip、wheel、索引、回退）+ 21 经引擎检查的安装与报告 + 4 取消等待 + 7 doctor 工具与命令行（假 uv 与假 python，不下载）
+npm run release:check     # 核对 npm/Python/uv.lock 版本、发布元数据、随包引擎（wheel、清单、lock 哈希）与 vendor/requirements.txt 一致
+npm run release:pack      # 检查并独立安装实际 npm 包，让它自己构建引擎环境，输出到 dist/，不会发布
 ```
 
 Node 检查驱动的是引擎 checkout，而不是随包的 wheel。checkout 不在同级 `../jev-ultrafast` 时：
@@ -451,11 +470,11 @@ DSH host (Node)                                        ← 本仓库 lib/
                    专用 Chrome 实例（每 Session 一份 profile）
 
 引擎 = jev_ultrafast（另一个仓库；它的 wheel 随包放在 vendor/），sidecar 从 <plugin>/.venv
-       import 它，这个环境由插件首次加载时用 uv 构建。
+       import 它，这个环境由插件首次加载时构建。
 ```
 ## 九、局限
 
-- **引擎在插件加载时安装，而不是由包管理器安装**：DSH 安装插件时生命周期脚本默认被拦下，所以由插件自己安装它带的引擎（见第四节）。这需要 uv，第一次还需要能访问 PyPI（uv 找不到 Python 3.12 时，还要能下载 Python）。装完之前浏览器调用会等待；失败会给出修复方法。设置了 `projectPath` 或 `pythonPath` 时，环境归你管，插件只把命令交给你。
+- **引擎在插件加载时安装，而不是由包管理器安装**：DSH 安装插件时生命周期脚本默认被拦下，所以由插件自己安装它带的引擎（见第四节）。这需要一个 Python 3.12+ 或 uv——两者都是先找、不假设——第一次还需要从 PyPI 下载约 1.3 MB（由 uv 代劳时，还要下载 Python 3.12 和 lock 里的 wheel）。装完之前浏览器调用会等待；失败会给出修复方法。设置了 `projectPath` 或 `pythonPath` 时，环境归你管，插件只把命令交给你。
 - 依赖 Python 引擎；引擎不可用时浏览器工具会拒绝并给出修复命令（`browser_doctor` 随时可查）。
 - `browserUse` 槽独占（仅当该服务被挂载时）。
 - 改了插件代码要**重启 DSH** 才生效。
@@ -474,12 +493,13 @@ dsh plugin --profile desktop remove @weichen96/dsh-browser-use
 
 ## 十一、CI 与发版
 
-[`ci.yml`](https://github.com/ricardochen1996/dsh-browser-use/blob/main/.github/workflows/ci.yml) 在 PR 和 `main` 分支推送时运行：Ubuntu 24.04、Node 22.19.0 / 24.21.0、Python 3.12，浏览器使用 runner 自带 Chrome。Actions 和包管理器版本均固定；pnpm 和 uv 使用 lockfile 安装。测试驱动的引擎 checkout 取 `vendor/jev-ultrafast.json` 记录的 revision，CI 还会从这个 revision 重新构建随包 wheel，任何文件不同即失败（`bin/vendor_engine.py check`）。检查包含 lint、单测、真实浏览器集成、npm/Python 版本一致性、随包引擎的 wheel/清单/lock 哈希一致性、测速图再生成一致性，以及实际 npm tarball 连同其引擎的独立安装。不需要任何模型凭据。
+[`ci.yml`](https://github.com/ricardochen1996/dsh-browser-use/blob/main/.github/workflows/ci.yml) 在 PR 和 `main` 分支推送时运行：Ubuntu 24.04、Node 22.19.0 / 24.21.0、Python 3.12，浏览器使用 runner 自带 Chrome。Actions 和包管理器版本均固定；pnpm 和 uv 使用 lockfile 安装。测试驱动的引擎 checkout 取 `vendor/jev-ultrafast.json` 记录的 revision，CI 还会从这个 revision 重新构建随包 wheel，任何文件不同即失败（`bin/vendor_engine.py check`）。检查包含 lint、单测、真实浏览器集成、npm/Python 版本一致性、随包引擎的 wheel/清单/lock 哈希一致性、`vendor/requirements.txt` 与 `uv.lock` 的一致性、测速图再生成一致性，以及实际 npm tarball 连同其引擎的独立安装。不需要任何模型凭据。
 
-升级引擎时，要明确地重建随包 wheel：把干净的引擎 checkout 切到要采用的 commit，然后一起提交 `vendor/`、`pyproject.toml` 和 `uv.lock`：
+升级引擎时，要明确地重建随包 wheel：把干净的引擎 checkout 切到要采用的 commit，一起提交 `vendor/`、`pyproject.toml` 和 `uv.lock`，再重新生成 pip 要装的那份清单：
 
 ```bash
 uv run python bin/vendor_engine.py update ../jev-ultrafast   # 从它的 HEAD 构建 wheel、写清单、重新锁定
+uv run python bin/vendor_requirements.py update              # 按新的 lock 重新生成 vendor/requirements.txt
 uv run python bin/vendor_engine.py check ../jev-ultrafast    # 即 CI 跑的检查：wheel 恰好是那个 revision
 ```
 
@@ -518,7 +538,7 @@ npm run check
 npm run test:e2e
 npm run release:pack
 
-git add package.json pyproject.toml uv.lock
+git add package.json pyproject.toml uv.lock vendor/requirements.txt
 git commit -m "chore(release): v0.3.1"
 git tag -a v0.3.1 -m "v0.3.1"
 git push --atomic origin main v0.3.1
