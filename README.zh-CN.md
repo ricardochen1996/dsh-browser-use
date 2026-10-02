@@ -166,7 +166,7 @@ dsh plugin --profile desktop add @ricardochen1996/dsh-browser-use
 node /path/to/node_modules/@ricardochen1996/dsh-browser-use/bin/doctor.mjs --install
 ```
 
-安装不放在 npm 的 `postinstall` 脚本里：DSH 安装插件时生命周期脚本默认被拦下，所以由插件在加载时自己装。npm 不会安装 Chrome。如果只是安装到 Node 项目而不是 DSH profile，可用 `npm install @ricardochen1996/dsh-browser-use`；这个命令本身不会把插件注册到 DSH。需要固定版本时，在上述包名后追加版本号，例如 `@0.5.1`。
+安装不放在 npm 的 `postinstall` 脚本里：DSH 安装插件时生命周期脚本默认被拦下，所以由插件在加载时自己装。npm 不会安装 Chrome。如果只是安装到 Node 项目而不是 DSH profile，可用 `npm install @ricardochen1996/dsh-browser-use`；这个命令本身不会把插件注册到 DSH。需要固定版本时，在上述包名后追加 `@0.5.1`。
 
 如果已经装了旧 scope 下的版本（`@weichen96/dsh-browser-use`，到 `0.5.0` 为止）或未发布的本地 `@rc/dsh-browser-use`，请先移除旧插件条目再安装 npm 包，不要同时启用两个 provider。内部 `id: dsh-browser-use` 和配置字段保持不变。profile 里仍把 `projectPath` 设为引擎 checkout 的，会继续用那个 checkout；删掉它就改用随包的引擎。
 
@@ -510,7 +510,7 @@ uv run python bin/vendor_engine.py check ../jev-ultrafast    # 即 CI 跑的检�
 
 ### 一次性配置 Trusted publishing
 
-**这个包名在 registry 上还不存在。** npm 的 trusted publishing 配置挂在包自己的设置页上，而设置页要等包发布之后才有，所以 `@ricardochen1996/dsh-browser-use` 的第一个版本需要手动发布：先用 `npm run release:pack` 打出 tarball，再用账号 2FA 执行 `npm publish ./dist/*.tgz --access public`（不要加 `--provenance`，它需要 CI 的 OIDC）。发布之后才能按下表添加 publisher，之后的版本都走 `release.yml`。`0.5.0` 及更早的版本发布在 `@weichen96/dsh-browser-use` 下，仍然可以安装；用 `npm deprecate @weichen96/dsh-browser-use "renamed to @ricardochen1996/dsh-browser-use"` 可以把用户指向新包名。
+**这个包名的第一个版本是手动发布的。** npm 的 trusted publishing 配置挂在包自己的设置页上，而设置页要等包发布之后才有，所以 `0.5.0` 是用 `npm run release:pack` 打出 tarball、再用账号 2FA 执行 `npm publish ./dist/*.tgz --access public` 发出去的（不能加 `--provenance`，它需要 CI 的 OIDC）。按下表加好 publisher 之后，从 `0.5.1` 起的版本都走 `release.yml`。`0.5.0` 及更早的版本也发布在旧 scope `@weichen96/dsh-browser-use` 下，仍然可以安装；用 `npm deprecate @weichen96/dsh-browser-use "renamed to @ricardochen1996/dsh-browser-use"` 可以把用户指向新包名。
 
 在 npm 包的 **Settings → Trusted publishing** 中添加 GitHub Actions publisher：
 
@@ -537,19 +537,19 @@ npx npm@11.20.0 trust github @ricardochen1996/dsh-browser-use --file release.yml
 从干净、已更新的 `main` checkout 开始，同级放好测试驱动的引擎 checkout（`../jev-ultrafast`，位于 `vendor/jev-ultrafast.json` 记录的 revision），一起更新三处版本记录：
 
 ```bash
-npm version 0.5.1 --no-git-tag-version
-uv version 0.5.1 --no-sync
+npm version 0.5.2 --no-git-tag-version
+uv version 0.5.2 --no-sync
 npm run check
 npm run test:e2e
 npm run release:pack
 
 git add package.json pyproject.toml uv.lock vendor/requirements.txt
-git commit -m "chore(release): v0.5.1"
-git tag -a v0.5.1 -m "v0.5.1"
-git push --atomic origin main v0.5.1
+git commit -m "chore(release): v0.5.2"
+git tag -a v0.5.2 -m "v0.5.2"
+git push --atomic origin main v0.5.2
 ```
 
-确认 Release workflow 成功后再对外宣布。失败重跑可用 **Re-run jobs**，或 `gh workflow run release.yml --ref v0.5.1`；选择分支而不是标签会被拒绝。不要移动已发布标签，也不要重复使用已发布的版本号。
+确认 Release workflow 成功后再对外宣布。失败重跑可用 **Re-run jobs**，或 `gh workflow run release.yml --ref v0.5.2`；选择分支而不是标签会被拒绝。不要移动已发布标签，也不要重复使用已发布的版本号。
 
 `v0.1.0` 对应已发布到 npm 的源码，早于这套 workflows。推送该标签**不会**执行新流程，也不要把它移动到 CI commit。推送 `main` 和 `v0.1.0` 后，可单独补建该版本的 GitHub Release，不会重复发布 npm：
 
