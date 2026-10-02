@@ -3,6 +3,6 @@
 # (id: dsh-browser-use) to point at another engine checkout, browser, or endpoint.
 - insert:
     - id: dsh-browser-use
-      name: "@weichen96/dsh-browser-use"
+      name: "@ricardochen1996/dsh-browser-use"
       config:
         mode: launch

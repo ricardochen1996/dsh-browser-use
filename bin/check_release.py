@@ -8,7 +8,7 @@ import re
 import tomllib
 from pathlib import Path
 
-PACKAGE = "@weichen96/dsh-browser-use"
+PACKAGE = "@ricardochen1996/dsh-browser-use"
 REPOSITORY = "git+https://github.com/ricardochen1996/dsh-browser-use.git"
 REGISTRY = "https://registry.npmjs.org/"
 ENGINE = "jev-ultrafast"
