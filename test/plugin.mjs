@@ -6,8 +6,11 @@
  * through `DSH_BROWSER_USE_PROJECT` / `JEV_ULTRAFAST_PROJECT`, or beside this package.
  */
 
+import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { createServer as createHttpServer } from 'node:http'
+import { createServer as createTcpServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -349,6 +352,106 @@ async function attachToYourChrome() {
 }
 
 /**
+ * Attach mode is checked before the first browser call, and the check is the answer that call would
+ * get: an endpoint is asked the way the engine asks it, and the browser you browse with is asked
+ * through the engine that would find it. The doctor must not call itself ready while the browser it
+ * was told to drive is not there, and the fix has to arrive when the mode is chosen rather than on
+ * the first failed browser call.
+ *
+ * The engine is stubbed here rather than installed: what is under test is the check, and a stub is
+ * the only way to ask for "no browser found" on a machine that has one.
+ */
+async function attachPreflight() {
+  const engine = await import(pathToFileURL(join(PACKAGE_ROOT, 'lib', 'engine.js')).href)
+  let count = 0
+  const ok = (condition, message) => { check(condition, message); count += 1 }
+  const absent = { pythonPath: '/nonexistent/python', projectPath: '' }
+
+  const devtools = createHttpServer((request, response) => {
+    if (request.url !== '/json/version') { response.writeHead(404).end(); return }
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ Browser: 'Chrome/140.0.7390.55', webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/browser/abc' }))
+  })
+  await new Promise(resolve => devtools.listen(0, '127.0.0.1', resolve))
+  try {
+    const endpoint = `http://127.0.0.1:${devtools.address().port}`
+    const live = await engine.inspectEngine({ ...absent, mode: 'attach', cdpEndpoint: endpoint }, { fresh: true })
+    ok(live.attach?.reachable === true, 'an endpoint that answers /json/version counts as reachable')
+    ok(live.attach.detail.includes('Chrome/140.0.7390.55'), 'the check names the browser the endpoint says it is')
+    ok(live.problems.every(item => item.code !== 'attach_unreachable'), 'an endpoint that answers is not reported as a problem')
+  } finally {
+    await new Promise(resolve => devtools.close(resolve))
+  }
+
+  const dead = await engine.inspectEngine({ ...absent, mode: 'attach', cdpEndpoint: 'http://127.0.0.1:1' }, { fresh: true })
+  ok(dead.ok === false && dead.attach?.reachable === false, 'an endpoint nothing answers fails the report instead of reading as ready')
+  const deadText = engine.reportText(dead)
+  ok(deadText.includes('http://127.0.0.1:1') && /fix:/u.test(deadText), 'the doctor names the endpoint and what to do about it')
+  ok(!/Status\s*:\s*ready/u.test(deadText), 'the doctor does not say ready while the browser it was told to drive is absent')
+
+  const tcp = createTcpServer(socket => socket.destroy())
+  await new Promise(resolve => tcp.listen(0, '127.0.0.1', resolve))
+  try {
+    const ws = await engine.inspectEngine(
+      { ...absent, mode: 'attach', cdpEndpoint: `ws://127.0.0.1:${tcp.address().port}/devtools/browser/x` }, { fresh: true })
+    ok(ws.attach?.reachable === true, 'a ws endpoint with something listening counts as reachable')
+  } finally {
+    await new Promise(resolve => tcp.close(resolve))
+  }
+  const wsDead = await engine.inspectEngine({ ...absent, mode: 'attach', cdpEndpoint: 'ws://127.0.0.1:1/devtools/browser/x' }, { fresh: true })
+  ok(wsDead.attach?.reachable === false && /nothing is listening/u.test(engine.reportText(wsDead)), 'a ws endpoint nothing listens at says so')
+
+  // An interpreter that answers the engine probe and then refuses the attach probe, so the answer
+  // the engine gives for "no browser found" is exercised without depending on this machine's browser.
+  const scratch = await mkdtemp(join(tmpdir(), 'dsh-browser-use-attach-'))
+  try {
+    const answerPath = join(scratch, 'answer.json')
+    const program = join(scratch, 'stub.cjs')
+    await writeFile(program, [
+      'const fs = require("node:fs")',
+      'const asked = process.argv.slice(2).join("\u0000")',
+      'const engine = { python: "3.12.14", engine: "0.1.0", enginePath: "/tmp/engine", browserHarness: "0.1.13" }',
+      `process.stdout.write(JSON.stringify(asked.includes("discover_local_browser")`
+        + ` ? JSON.parse(fs.readFileSync(${JSON.stringify(answerPath)}, "utf8")) : engine))`,
+      '',
+    ].join('\n'))
+    const python = join(scratch, 'python')
+    await writeFile(python, `#!/bin/sh\nexec "${process.execPath}" "${program}" "$@"\n`, { mode: 0o755 })
+
+    await writeFile(answerPath, JSON.stringify({ kind: 'no_browser', message: 'No running browser has remote debugging turned on.' }))
+    const noBrowser = await engine.inspectEngine({ pythonPath: python, mode: 'attach' }, { fresh: true })
+    ok(noBrowser.ok === false && noBrowser.problems.some(item => item.code === 'no_browser'),
+      'a browser you browse with that cannot be found is a problem, not a note nobody reads')
+    ok(noBrowser.attach.detail.includes('not found') && /remote debugging turned on/u.test(noBrowser.attach.message),
+      'the doctor keeps the engine\u2019s own words about the browser it could not find')
+    ok(/mode to "launch"/u.test(noBrowser.attach.fix), 'the fix offers the mode that needs no browser of yours')
+
+    await writeFile(answerPath, JSON.stringify({ kind: 'no_permission', message: 'This process may not read the profile.' }))
+    const noPermission = await engine.inspectEngine({ pythonPath: python, mode: 'attach' }, { fresh: true })
+    ok(noPermission.problems.some(item => item.code === 'no_permission'),
+      'a profile the process may not read is reported under its own code')
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
+  }
+
+  const unchecked = await engine.inspectEngine({ ...absent, mode: 'attach' }, { fresh: true })
+  ok(unchecked.attach?.checked === false && /not checked/u.test(unchecked.attach.detail),
+    'with no engine the browser you browse with reads as not checked, never as ready')
+  ok(unchecked.problems.map(item => item.code).join(',') === 'no_engine',
+    'a missing engine is reported once, without inventing an attach problem on top of it')
+
+  const cli = (...args) => spawnSync(process.execPath, [join(PACKAGE_ROOT, 'bin', 'doctor.mjs'), ...args], { encoding: 'utf8' })
+  const mode = cli('--mode', 'borrow')
+  ok(mode.status === 2 && /mode must be "launch" or "attach"/u.test(mode.stderr), 'the command refuses a mode the profile would refuse')
+  const url = cli('--mode', 'attach', '--cdp-endpoint', 'not a url')
+  ok(url.status === 2 && /cdpEndpoint must be/u.test(url.stderr), 'the command refuses an endpoint the profile would refuse')
+  const run = cli('--mode', 'attach', '--cdp-endpoint', 'http://127.0.0.1:1')
+  ok(run.status === 1 && run.stdout.includes('http://127.0.0.1:1') && /fix:/u.test(run.stdout) && /Mode\s*:\s*attach/u.test(run.stdout),
+    'the command checks the attached browser the way DSH does at load, and exits 1 for it')
+  console.log(`PASS: ${count} attach-preflight checks; no browser, no engine`)
+}
+
+/**
  * What the Settings page shows and what a live edit does.
  *
  * DSH renders that page from the plugin's exported `Config`: only fields under a volatile node get a
@@ -477,5 +580,6 @@ await missingEngine()
 await engineConfiguration()
 await attachExclusivity()
 await attachToYourChrome()
+await attachPreflight()
 await settingsForm()
 await cancelInFlight()

@@ -131,6 +131,8 @@ Without a target: WAIT
 - **接你正在用的 Chrome（不填 `cdpEndpoint`）**：在那个 Chrome 里打开 `chrome://inspect/#remote-debugging`，允许远程调试；插件通过 Chrome 写在 profile 里的 `DevToolsActivePort` 自动找到它，在里面新开一个标签页干活，登录态直接可用。macOS 下这个文件受隐私保护，**运行 DSH 的 App 需要"完全磁盘访问权限"**（系统设置 → 隐私与安全性 → 完全磁盘访问权限，授权后重启 DSH），否则会明确报 `no_permission`。每个 DSH Session 第一次连接时 Chrome 会弹一次"允许远程调试？"，点允许即可；插件只关自己开的标签页，结束时不会关你的浏览器。引擎直接用连接层为本次运行建好的那个标签页，不会再额外开空白页；你自己打开的空白新标签页也不会被关。
 - **接一个专用的调试 Chrome（填 `cdpEndpoint`）**：`http://127.0.0.1:9333` 或 `ws://…/devtools/browser/…`，见下方配置表。
 
+attach 模式是**在 profile 加载时**就检查的，而不是等到第一次调用浏览器工具：填了 `cdpEndpoint` 就问它的 `/json/version`（`ws://` 地址则只问端口上有没有人在听），没填就按引擎找它的方式去找你正在用的 Chrome。检查通过，`browser_doctor` 才会报 `Status: ready`；不通过，加载日志里直接带着修复办法 —— `node bin/doctor.mjs --mode attach` 可以在终端里问同一个问题。这项检查只读 Chrome 已经公开的东西：不开页面，也不会等任何弹窗。
+
 每个 Session 用**自己的** profile：同一个 profile 如果已有浏览器在跑，Chrome 会把新启动"交接"给旧实例并直接退出（status 0），两个 Session 就会共用一个浏览器。因此插件按 Session 分目录；若宿主重启而浏览器还在，插件会**接管**那个实例（同一个 Session 的同一份 profile），继续用它的登录态与标签页，而不是再起一个。
 
 一次启动只留**一个**标签页：浏览器自己会开一个启动标签页，连接层又会给这次运行一个独立标签页（命名 daemon 之间不能共用一个），运行驱动后者；页面就绪后，启动标签页会被关掉。收尾是保守的——浏览器里只剩空白页时不关，用户正在读的页面永远不关。
@@ -398,7 +400,7 @@ npm run check             # lint、Python 单测、发版元数据 + Node 检查
 uv run pytest             # sidecar 协议与发版门禁单测（离线）
 uv run python test/check_bridge.py   # 10 项：sidecar 端到端（stdio + 真浏览器）
 uv run python test/check_tabs.py     # 5 项：一次启动只留一个标签页
-node test/plugin.mjs      # 66 项：24 工具与拒绝（真浏览器）+ 3 元素状态渲染 + 4 缺引擎诊断 + 16 引擎配置 + 2 attach 独占 + 3 接你的 Chrome + 11 设置页表单与即时生效 + 3 在途取消
+node test/plugin.mjs      # 83 项：24 工具与拒绝（真浏览器）+ 3 元素状态渲染 + 4 缺引擎诊断 + 16 引擎配置 + 2 attach 独占 + 3 接你的 Chrome + 17 attach 预检 + 11 设置页表单与即时生效 + 3 在途取消
 node test/delegation.mjs  # 70 项：对话只见 browser_task(+_status)、常驻子 agent 接收后续任务、释放/重启后恢复并重新挂工具、状态与等待（结算、超时、用户发话、子 agent 来信、取消、静默退出）、fresh 与丢失替换、一次性委派、取消与回退
 node test/inspector.mjs   # 27 项：Web 端注册 + 配置表单的注册键/字段/写回 + host 路由 + 页面可渲染
 node test/provision.mjs   # 93 项：14 uv 查找与失败诊断 + 24 安装（同时只跑一次、失败→修复、重试窗口、没有 uv、超时）+ 23 Python 路径（探测、venv、按哈希 pip、wheel、索引、回退）+ 21 经引擎检查的安装与报告 + 4 取消等待 + 7 doctor 工具与命令行（假 uv 与假 python，不下载）
@@ -432,6 +434,7 @@ npm 上未 scoped 的 `dsh-browser-use` 属于**另一个项目**（Browser Use 
 | 释放前先停工具、再等自有工作结束 | effect 的清理顺序：工具 → Session 浏览器 → 注册槽 |
 | 浏览器属于确切的 live Agent/Session | 每次调用都核对发起者仍是 live agent；resume/fork 是新的浏览器 |
 | 附加浏览器独占 | 该 provider 实例内一次只留给一个 live Session，第二个被明确拒绝（另有 2 项检查） |
+| attach 可用性是查出来的，不是假设的 | 填了地址就问 `GET /json/version`（`ws://` 地址只问有没有人在听），没填就通过引擎去找你正在用的浏览器；被指定驱动的浏览器不在时，doctor 报错而不是报 `ready`（另有 17 项检查） |
 | 取消是启动前后统一的通道 | 请求级 `AbortSignal`：在途请求立即结算（kind `cancelled`），委派与 `run.dispose()` 一起收尾；**已交付给浏览器的操作不回滚** |
 | 清理失败不重用 | 关闭失败的代次被标记为不可用：下一次打开换新进程 + 新 daemon 名，并把原因写进工具结果 |
 | 子 agent 生命周期归宿主 | 用 `ctx.subagents.startContinuable()` / `sendMessage()`（一次性模式用 `start()`）启动和续派，不自己造 Agent；`toolFilter` / 子 agent scope / 结束通知都用宿主机制，`browser_task_status` 读的也是宿主的 `subagent/start` / `subagent/end` 事件，不自己计时猜测 |
