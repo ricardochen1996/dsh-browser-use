@@ -166,7 +166,7 @@ To install ahead of time, or retry after a failure, ask for `browser_doctor` wit
 node /path/to/node_modules/@ricardochen1996/dsh-browser-use/bin/doctor.mjs --install
 ```
 
-The install is not an npm `postinstall` script: DSH installs plugins with lifecycle scripts gated off, so the plugin does it when it loads. npm does not install Chrome. If installing the package into a Node project rather than a DSH profile, use `npm install @ricardochen1996/dsh-browser-use`; this alone does not register it with DSH. Append a version such as `@0.5.1` to either command to pin a release.
+The install is not an npm `postinstall` script: DSH installs plugins with lifecycle scripts gated off, so the plugin does it when it loads. npm does not install Chrome. If installing the package into a Node project rather than a DSH profile, use `npm install @ricardochen1996/dsh-browser-use`; this alone does not register it with DSH. Append `@0.5.1` to either command to pin a release.
 
 If you already installed an earlier release under the old scope (`@weichen96/dsh-browser-use`, up to `0.5.0`), or the unpublished local `@rc/dsh-browser-use` package, remove that plugin entry before adding the npm package; do not enable both providers. The internal `id: dsh-browser-use` and configuration keys remain unchanged. A profile that still sets `projectPath` to an engine checkout keeps using that checkout; remove it to use the bundled engine.
 
@@ -511,7 +511,7 @@ uv run python bin/vendor_engine.py check ../jev-ultrafast    # what CI runs: the
 
 ### One-time trusted publishing setup
 
-**This package name is new on the registry.** npm configures trusted publishing on the package's own settings page, and that page only exists once the package does — so the first version of `@ricardochen1996/dsh-browser-use` has to be published by hand: build the tarball with `npm run release:pack`, then `npm publish ./dist/*.tgz --access public` with the account's 2FA (no `--provenance`, which needs CI's OIDC). After that the publisher below can be added, and every later release goes through `release.yml`. Releases up to `0.5.0` were published as `@weichen96/dsh-browser-use`; they stay installable, and `npm deprecate @weichen96/dsh-browser-use "renamed to @ricardochen1996/dsh-browser-use"` points users at the new name.
+**The first version of this name was published by hand.** npm configures trusted publishing on the package's own settings page, and that page only exists once the package does — so `0.5.0` was built with `npm run release:pack` and pushed with `npm publish ./dist/*.tgz --access public` and the account's 2FA (no `--provenance`, which needs CI's OIDC). With the publisher below in place, every release from `0.5.1` on goes through `release.yml`. Releases up to `0.5.0` were also published as `@weichen96/dsh-browser-use`; they stay installable, and `npm deprecate @weichen96/dsh-browser-use "renamed to @ricardochen1996/dsh-browser-use"` points users at the new name.
 
 In the npm package's **Settings → Trusted publishing**, add a GitHub Actions publisher:
 
@@ -538,19 +538,19 @@ In GitHub, create the **`npm` environment** and allow version-tag deployments. R
 Start from a clean, up-to-date `main` checkout, with the engine checkout the tests drive (`../jev-ultrafast`) at the revision `vendor/jev-ultrafast.json` names. Keep all three version records together:
 
 ```bash
-npm version 0.5.1 --no-git-tag-version
-uv version 0.5.1 --no-sync
+npm version 0.5.2 --no-git-tag-version
+uv version 0.5.2 --no-sync
 npm run check
 npm run test:e2e
 npm run release:pack
 
 git add package.json pyproject.toml uv.lock vendor/requirements.txt
-git commit -m "chore(release): v0.5.1"
-git tag -a v0.5.1 -m "v0.5.1"
-git push --atomic origin main v0.5.1
+git commit -m "chore(release): v0.5.2"
+git tag -a v0.5.2 -m "v0.5.2"
+git push --atomic origin main v0.5.2
 ```
 
-Inspect the Release workflow before announcing the release. To retry a failed run, use **Re-run jobs**, or `gh workflow run release.yml --ref v0.5.1`; dispatching on a branch is rejected. Never move a published tag or reuse a published version.
+Inspect the Release workflow before announcing the release. To retry a failed run, use **Re-run jobs**, or `gh workflow run release.yml --ref v0.5.2`; dispatching on a branch is rejected. Never move a published tag or reuse a published version.
 
 `v0.1.0` records the source of the already-published npm package and predates these workflows. Pushing that tag does **not** run the new workflow, and it must not be moved to the CI commit. After pushing `main` and `v0.1.0`, its GitHub release can be backfilled without republishing npm:
 
