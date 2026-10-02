@@ -2,7 +2,7 @@
 
 **English** · [中文](README.zh-CN.md)
 
-# @weichen96/dsh-browser-use
+# @ricardochen1996/dsh-browser-use
 
 > Give **DeepSeek Harness** a browser that can *see and click*: a page is read as an **indexed action-space table**, and the model does exactly one operation on one observed target per step.
 
@@ -144,7 +144,7 @@ A launch leaves exactly **one** tab: the browser opens a startup tab, and the co
 The host half is plain ESM; the web half is a hand-written `__ModuleLoader__` script — no tsdown/rollup step. Clone it, `pnpm install` once (only for `@deepseek-ai/schemastery`, used by the Config schema), then edit and restart.
 
 ### 10. Capabilities can be turned off
-`allowScreenshots`, `jev.enabled` and `reserveBrowserUseSlot` are all config options. Turn off `jev.enabled` to keep decisions with the calling model. The Jev settings are editable under **Sidebar → Plugins → `@weichen96/dsh-browser-use`**; `allowScreenshots` and `reserveBrowserUseSlot` are profile-patch settings.
+`allowScreenshots`, `jev.enabled` and `reserveBrowserUseSlot` are all config options. Turn off `jev.enabled` to keep decisions with the calling model. The Jev settings are editable under **Sidebar → Plugins → `@ricardochen1996/dsh-browser-use`**; `allowScreenshots` and `reserveBrowserUseSlot` are profile-patch settings.
 
 ---
 
@@ -155,7 +155,7 @@ The host half is plain ESM; the web half is a hand-written `__ModuleLoader__` sc
 Requires Node.js `^22.19.0 || >=24.0.0`, DSH and Chrome/Chromium. **Nothing else has to be installed by hand.** DSH ships a Python 3.12 runtime for its own document tools, and the plugin builds its environment with that interpreter — or with any other Python 3.12+ on the machine, or with [`uv`](https://docs.astral.sh/uv/getting-started/installation/) when the machine has neither.
 
 ```bash
-dsh plugin --profile desktop add @weichen96/dsh-browser-use
+dsh plugin --profile desktop add @ricardochen1996/dsh-browser-use
 ```
 
 Restart DSH. On its first load the plugin installs the engine it bundles into its own environment (`<plugin>/.venv`). It creates a virtualenv with the Python it found, then `pip` installs `vendor/requirements.txt` — the sidecar's runtime dependencies, pinned by version and by the hash of every artifact in `uv.lock` — and finally the engine wheel the package carries, from disk. A first install downloads about **1.3 MB** of wheels and takes a few seconds; when the machine has no Python 3.12+ it falls back to `uv sync --frozen` instead, which additionally fetches Python 3.12 (about 25 MB). The log says when it starts and when the engine is ready, browser tools wait for a running install, and `browser_doctor` shows how far it got. Later loads only check that the engine imports. Each plugin version builds its own environment, so an upgrade installs again. Behind a proxy, set `HTTPS_PROXY` in the environment DSH runs in.
@@ -163,12 +163,12 @@ Restart DSH. On its first load the plugin installs the engine it bundles into it
 To install ahead of time, or retry after a failure, ask for `browser_doctor` with `install: true`, or run the doctor in the installed package:
 
 ```bash
-node /path/to/node_modules/@weichen96/dsh-browser-use/bin/doctor.mjs --install
+node /path/to/node_modules/@ricardochen1996/dsh-browser-use/bin/doctor.mjs --install
 ```
 
-The install is not an npm `postinstall` script: DSH installs plugins with lifecycle scripts gated off, so the plugin does it when it loads. npm does not install Chrome. If installing the package into a Node project rather than a DSH profile, use `npm install @weichen96/dsh-browser-use`; this alone does not register it with DSH. Append `@0.5.0` to either command to pin a release.
+The install is not an npm `postinstall` script: DSH installs plugins with lifecycle scripts gated off, so the plugin does it when it loads. npm does not install Chrome. If installing the package into a Node project rather than a DSH profile, use `npm install @ricardochen1996/dsh-browser-use`; this alone does not register it with DSH. Append a version such as `@0.5.1` to either command to pin a release.
 
-If migrating from the unpublished local `@rc/dsh-browser-use` package, remove that plugin entry before adding the npm package; do not enable both providers. The internal `id: dsh-browser-use` and configuration keys remain unchanged. A profile that still sets `projectPath` to an engine checkout keeps using that checkout; remove it to use the bundled engine.
+If you already installed an earlier release under the old scope (`@weichen96/dsh-browser-use`, up to `0.5.0`), or the unpublished local `@rc/dsh-browser-use` package, remove that plugin entry before adding the npm package; do not enable both providers. The internal `id: dsh-browser-use` and configuration keys remain unchanged. A profile that still sets `projectPath` to an engine checkout keeps using that checkout; remove it to use the bundled engine.
 
 ### From a local checkout
 
@@ -311,8 +311,8 @@ The `browser_doctor` tool returns the same report plus the current Session's bro
 
 **Change it in the UI (recommended)**: the plugin exports DSH's `Config` schema (`lib/config.js`), and the web half mounts the form in two places, so you don't need to find a config file and changes take effect immediately:
 
-- **Sidebar → Plugins → open `@weichen96/dsh-browser-use`**: the toggles are drawn right above "Included components" (the plugin page's own config area).
-- On the same page, **the `dsh-browser-use` row title is itself a "Configure" button** (with a `>` arrow, accessible name `Configure @weichen96/dsh-browser-use`) — it opens the same form.
+- **Sidebar → Plugins → open `@ricardochen1996/dsh-browser-use`**: the toggles are drawn right above "Included components" (the plugin page's own config area).
+- On the same page, **the `dsh-browser-use` row title is itself a "Configure" button** (with a `>` arrow, accessible name `Configure @ricardochen1996/dsh-browser-use`) — it opens the same form.
 
 The form has **only the jev group**, drawn with the shell's own components in the same row layout as other plugins:
 
@@ -391,7 +391,7 @@ In both modes, the endpoint and key used by `browser_goal` and `browser_act`'s `
 | `subagentProvider` | `spawn` | the provider name in `ctx.subagents`; it must be able to compose an **in-process** subagent, otherwise it falls back to direct mode |
 | `maxDepth` | `0` | delegation-depth cap for the subagent; `0` means use the provider's own recursion budget |
 
-✎ = appears in the form under **Sidebar → Plugins → `@weichen96/dsh-browser-use`** (the package page, or the "Configure" in the row title), with immediate effect (the next time the value is used); fields without ✎ are set only in the profile patch.
+✎ = appears in the form under **Sidebar → Plugins → `@ricardochen1996/dsh-browser-use`** (the package page, or the "Configure" in the row title), with immediate effect (the next time the value is used); fields without ✎ are set only in the profile patch.
 
 ## 6. Verify (spends nothing)
 
@@ -416,7 +416,7 @@ DSH_BROWSER_USE_PROJECT=/path/to/jev-ultrafast node test/plugin.mjs
 
 ## 7. Relation to the official `@deepseek-ai/dsh-browser-use`
 
-DSH ships `@deepseek-ai/dsh-browser-use`, which is the **service definition** for "browser capability" (one registration slot only, with no browser operations: no `dsh.bundle`, no `./client`, no registered tools). This project is a **third-party provider implementation**, package name `@weichen96/dsh-browser-use` — a different scope, so the two don't override each other.
+DSH ships `@deepseek-ai/dsh-browser-use`, which is the **service definition** for "browser capability" (one registration slot only, with no browser operations: no `dsh.bundle`, no `./client`, no registered tools). This project is a **third-party provider implementation**, package name `@ricardochen1996/dsh-browser-use` — a different scope, so the two don't override each other.
 
 The unscoped `dsh-browser-use` on npm is **a different project** (a Browser Use Cloud bridge), unrelated to this plugin; install by scope so you don't get the wrong one.
 
@@ -448,7 +448,7 @@ Only the **package name** changed. These are stable anchors for config and UI an
 - web half: tab id `dsh-browser-use/inspector`, panel route `/browser-use/`;
 - log and error prefix: `dsh-browser-use:`.
 
-**The client module id and plugin form registration keys must use the package name**, now `@weichen96/dsh-browser-use`. The host dispatches `__ModuleLoader__.load({ id })` by the loader line's `name` (the package name); a mismatch shows `bundle … loaded without registering "…"` in the console. The `cordis.patch.yml` bundle row uses the same package name while retaining its internal row id.
+**The client module id and plugin form registration keys must use the package name**, now `@ricardochen1996/dsh-browser-use`. The host dispatches `__ModuleLoader__.load({ id })` by the loader line's `name` (the package name); a mismatch shows `bundle … loaded without registering "…"` in the console. The `cordis.patch.yml` bundle row uses the same package name while retaining its internal row id.
 
 ## 8. How it works
 
@@ -492,7 +492,7 @@ engine = jev_ultrafast (a separate repo; a wheel of it ships in vendor/), import
 ## 10. Uninstall
 
 ```bash
-dsh plugin --profile desktop remove @weichen96/dsh-browser-use
+dsh plugin --profile desktop remove @ricardochen1996/dsh-browser-use
 ```
 
 ## 11. CI and releases
@@ -511,6 +511,8 @@ uv run python bin/vendor_engine.py check ../jev-ultrafast    # what CI runs: the
 
 ### One-time trusted publishing setup
 
+**This package name is new on the registry.** npm configures trusted publishing on the package's own settings page, and that page only exists once the package does — so the first version of `@ricardochen1996/dsh-browser-use` has to be published by hand: build the tarball with `npm run release:pack`, then `npm publish ./dist/*.tgz --access public` with the account's 2FA (no `--provenance`, which needs CI's OIDC). After that the publisher below can be added, and every later release goes through `release.yml`. Releases up to `0.5.0` were published as `@weichen96/dsh-browser-use`; they stay installable, and `npm deprecate @weichen96/dsh-browser-use "renamed to @ricardochen1996/dsh-browser-use"` points users at the new name.
+
 In the npm package's **Settings → Trusted publishing**, add a GitHub Actions publisher:
 
 | Setting | Value |
@@ -523,7 +525,7 @@ In the npm package's **Settings → Trusted publishing**, add a GitHub Actions p
 The publisher must be allowed to publish. The terminal equivalent needs account 2FA, and `--allow-publish` is off unless passed:
 
 ```bash
-npx npm@11.20.0 trust github @weichen96/dsh-browser-use --file release.yml \
+npx npm@11.20.0 trust github @ricardochen1996/dsh-browser-use --file release.yml \
   --repo ricardochen1996/dsh-browser-use --env npm --allow-publish
 ```
 

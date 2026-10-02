@@ -2,7 +2,7 @@
 
 [English](README.md) · **中文**
 
-# @weichen96/dsh-browser-use
+# @ricardochen1996/dsh-browser-use
 
 > 给 **DeepSeek Harness** 装上"能看、能点"的浏览器：页面被读成一张**带索引的动作空间表**，模型每步只做一个操作、只对一个观测到的目标。
 
@@ -144,7 +144,7 @@ attach 模式是**在 profile 加载时**就检查的，而不是等到第一次
 host 半是普通 ESM，Web 半是手写的 `__ModuleLoader__` 脚本，没有 tsdown/rollup 步骤；克隆下来 `pnpm install` 一次（只为 `@deepseek-ai/schemastery`，Config schema 用），之后改完重启即可。
 
 ### 10. 能力可关
-`allowScreenshots`、`jev.enabled`、`reserveBrowserUseSlot` 都是配置项。关闭 `jev.enabled` 即由调用方模型继续决策；Jev 设置可在**侧边栏「插件」→ `@weichen96/dsh-browser-use`** 的配置区里修改，`allowScreenshots` 和 `reserveBrowserUseSlot` 则在 profile patch 中配置。
+`allowScreenshots`、`jev.enabled`、`reserveBrowserUseSlot` 都是配置项。关闭 `jev.enabled` 即由调用方模型继续决策；Jev 设置可在**侧边栏「插件」→ `@ricardochen1996/dsh-browser-use`** 的配置区里修改，`allowScreenshots` 和 `reserveBrowserUseSlot` 则在 profile patch 中配置。
 
 ---
 
@@ -155,7 +155,7 @@ host 半是普通 ESM，Web 半是手写的 `__ModuleLoader__` 脚本，没有 t
 需要 Node.js `^22.19.0 || >=24.0.0`、DSH 和 Chrome/Chromium。**其余都不用你自己装。** DSH 为自家的文档工具带了一个 Python 3.12 运行时，插件就用它构建环境；也可以用机器上任何其他 Python 3.12+；两者都没有时才用 [`uv`](https://docs.astral.sh/uv/getting-started/installation/)。
 
 ```bash
-dsh plugin --profile desktop add @weichen96/dsh-browser-use
+dsh plugin --profile desktop add @ricardochen1996/dsh-browser-use
 ```
 
 重启 DSH。插件第一次加载时，会把随包的引擎装进它自己的环境（`<plugin>/.venv`）：先用找到的 Python 建一个 virtualenv，再用 `pip` 安装 `vendor/requirements.txt`——sidecar 的运行时依赖，版本和每个产物的哈希都取自 `uv.lock`——最后从磁盘装上随包的引擎 wheel。第一次安装只下载约 **1.3 MB** 的 wheel，几秒钟完成；机器上确实没有 Python 3.12+ 时才退回 `uv sync --frozen`，那条路会额外下载约 25 MB 的 Python 3.12。日志会写明安装何时开始、引擎何时就绪；安装进行中时浏览器工具会等它完成，`browser_doctor` 能看到装到哪一步。之后每次加载只检查引擎能否 import。每个插件版本有各自的环境，所以升级后会重新安装一次。需要代理时，在 DSH 运行的环境里设置 `HTTPS_PROXY`。
@@ -163,12 +163,12 @@ dsh plugin --profile desktop add @weichen96/dsh-browser-use
 想提前装好、或在失败后重试：让模型调用 `browser_doctor` 并带上 `install: true`，或在已安装的包里运行 doctor：
 
 ```bash
-node /path/to/node_modules/@weichen96/dsh-browser-use/bin/doctor.mjs --install
+node /path/to/node_modules/@ricardochen1996/dsh-browser-use/bin/doctor.mjs --install
 ```
 
-安装不放在 npm 的 `postinstall` 脚本里：DSH 安装插件时生命周期脚本默认被拦下，所以由插件在加载时自己装。npm 不会安装 Chrome。如果只是安装到 Node 项目而不是 DSH profile，可用 `npm install @weichen96/dsh-browser-use`；这个命令本身不会把插件注册到 DSH。需要固定版本时，在上述包名后追加 `@0.5.0`。
+安装不放在 npm 的 `postinstall` 脚本里：DSH 安装插件时生命周期脚本默认被拦下，所以由插件在加载时自己装。npm 不会安装 Chrome。如果只是安装到 Node 项目而不是 DSH profile，可用 `npm install @ricardochen1996/dsh-browser-use`；这个命令本身不会把插件注册到 DSH。需要固定版本时，在上述包名后追加版本号，例如 `@0.5.1`。
 
-如果之前安装了未发布的本地 `@rc/dsh-browser-use`，请先移除旧插件条目再安装 npm 包，不要同时启用两个 provider。内部 `id: dsh-browser-use` 和配置字段保持不变。profile 里仍把 `projectPath` 设为引擎 checkout 的，会继续用那个 checkout；删掉它就改用随包的引擎。
+如果已经装了旧 scope 下的版本（`@weichen96/dsh-browser-use`，到 `0.5.0` 为止）或未发布的本地 `@rc/dsh-browser-use`，请先移除旧插件条目再安装 npm 包，不要同时启用两个 provider。内部 `id: dsh-browser-use` 和配置字段保持不变。profile 里仍把 `projectPath` 设为引擎 checkout 的，会继续用那个 checkout；删掉它就改用随包的引擎。
 
 ### 从本地 checkout 安装
 
@@ -311,8 +311,8 @@ Status   : ready
 
 **在界面里改（推荐）**：插件导出了 DSH 的 `Config` schema（`lib/config.js`），Web 半又把表单挂在了两个位置，所以不用找配置文件、改完即刻生效：
 
-- **侧边栏「插件」→ 打开 `@weichen96/dsh-browser-use`**：开关直接画在「包含的组件」上面（插件页自身的配置区）。
-- 同一页里 **`dsh-browser-use` 那一行的标题本身就是「配置」按钮**（带 `>` 箭头，无障碍名 `配置 @weichen96/dsh-browser-use`），点开是同一套表单。
+- **侧边栏「插件」→ 打开 `@ricardochen1996/dsh-browser-use`**：开关直接画在「包含的组件」上面（插件页自身的配置区）。
+- 同一页里 **`dsh-browser-use` 那一行的标题本身就是「配置」按钮**（带 `>` 箭头，无障碍名 `配置 @ricardochen1996/dsh-browser-use`），点开是同一套表单。
 
 表单里**只有 jev 这一组**，用 shell 自己的组件画成和其它插件一样的行式布局：
 
@@ -391,7 +391,7 @@ Status   : ready
 | `subagentProvider` | `spawn` | `ctx.subagents` 里的 provider 名；需要它能组合**进程内**子 agent，否则退回直接模式 |
 | `maxDepth` | `0` | 子 agent 的委派深度上限；`0` 表示用 provider 自己的递归预算 |
 
-✎ = 出现在**侧边栏「插件」→ `@weichen96/dsh-browser-use`**（包页面或行标题里的「配置」）的表单里，改完立即生效（在下次用到该值时）；没有 ✎ 的字段只在 profile patch 里配。
+✎ = 出现在**侧边栏「插件」→ `@ricardochen1996/dsh-browser-use`**（包页面或行标题里的「配置」）的表单里，改完立即生效（在下次用到该值时）；没有 ✎ 的字段只在 profile patch 里配。
 
 ## 六、验证（不花一分钱）
 
@@ -416,7 +416,7 @@ DSH_BROWSER_USE_PROJECT=/path/to/jev-ultrafast node test/plugin.mjs
 
 ## 七、与官方 `@deepseek-ai/dsh-browser-use` 的关系
 
-DSH 自带 `@deepseek-ai/dsh-browser-use`，那是"浏览器能力"的**服务定义**（只有一个注册槽，不含任何浏览器操作：没有 `dsh.bundle`、没有 `./client`、不注册工具）。本项目是**第三方 provider 实现**，包名 `@weichen96/dsh-browser-use`——scope 不同，两者不会互相覆盖。
+DSH 自带 `@deepseek-ai/dsh-browser-use`，那是"浏览器能力"的**服务定义**（只有一个注册槽，不含任何浏览器操作：没有 `dsh.bundle`、没有 `./client`、不注册工具）。本项目是**第三方 provider 实现**，包名 `@ricardochen1996/dsh-browser-use`——scope 不同，两者不会互相覆盖。
 
 npm 上未 scoped 的 `dsh-browser-use` 属于**另一个项目**（Browser Use Cloud 的桥接包），与本插件无关；按名安装时认 scope，别装错。
 
@@ -448,7 +448,7 @@ npm 上未 scoped 的 `dsh-browser-use` 属于**另一个项目**（Browser Use 
 - Web 端：tab id `dsh-browser-use/inspector`、面板路由 `/browser-use/`；
 - 日志与报错前缀：`dsh-browser-use:`。
 
-**客户端模块 id 和插件表单注册键必须使用包名**，现在是 `@weichen96/dsh-browser-use`。主机侧按 Loader 行的 `name`（包名）派发 `__ModuleLoader__.load({ id })`；不匹配时控制台会出现 `bundle … loaded without registering "…"`。`cordis.patch.yml` 的 bundle 行也使用同一包名，但内部行 id 保持不变。
+**客户端模块 id 和插件表单注册键必须使用包名**，现在是 `@ricardochen1996/dsh-browser-use`。主机侧按 Loader 行的 `name`（包名）派发 `__ModuleLoader__.load({ id })`；不匹配时控制台会出现 `bundle … loaded without registering "…"`。`cordis.patch.yml` 的 bundle 行也使用同一包名，但内部行 id 保持不变。
 
 ## 八、工作原理
 
@@ -491,7 +491,7 @@ DSH host (Node)                                        ← 本仓库 lib/
 ## 十、卸载
 
 ```bash
-dsh plugin --profile desktop remove @weichen96/dsh-browser-use
+dsh plugin --profile desktop remove @ricardochen1996/dsh-browser-use
 ```
 
 ## 十一、CI 与发版
@@ -510,6 +510,8 @@ uv run python bin/vendor_engine.py check ../jev-ultrafast    # 即 CI 跑的检�
 
 ### 一次性配置 Trusted publishing
 
+**这个包名在 registry 上还不存在。** npm 的 trusted publishing 配置挂在包自己的设置页上，而设置页要等包发布之后才有，所以 `@ricardochen1996/dsh-browser-use` 的第一个版本需要手动发布：先用 `npm run release:pack` 打出 tarball，再用账号 2FA 执行 `npm publish ./dist/*.tgz --access public`（不要加 `--provenance`，它需要 CI 的 OIDC）。发布之后才能按下表添加 publisher，之后的版本都走 `release.yml`。`0.5.0` 及更早的版本发布在 `@weichen96/dsh-browser-use` 下，仍然可以安装；用 `npm deprecate @weichen96/dsh-browser-use "renamed to @ricardochen1996/dsh-browser-use"` 可以把用户指向新包名。
+
 在 npm 包的 **Settings → Trusted publishing** 中添加 GitHub Actions publisher：
 
 | 设置 | 值 |
@@ -522,7 +524,7 @@ uv run python bin/vendor_engine.py check ../jev-ultrafast    # 即 CI 跑的检�
 该 publisher 必须拥有发布（publish）权限。命令行等价写法需要账号已开启 2FA，且 `--allow-publish` 默认关闭，必须显式传入：
 
 ```bash
-npx npm@11.20.0 trust github @weichen96/dsh-browser-use --file release.yml \
+npx npm@11.20.0 trust github @ricardochen1996/dsh-browser-use --file release.yml \
   --repo ricardochen1996/dsh-browser-use --env npm --allow-publish
 ```
 

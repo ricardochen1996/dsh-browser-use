@@ -81,7 +81,7 @@ async function checkClientHalf() {
   }
   await import(pathToFileURL(join(PACKAGE_ROOT, 'lib', 'client.js')).href)
   const loaded = globalThis.__loaded
-  check(loaded?.id === '@weichen96/dsh-browser-use', 'the bundle registers under the package name the shell dispatches')
+  check(loaded?.id === '@ricardochen1996/dsh-browser-use', 'the bundle registers under the package name the shell dispatches')
 
   const plugin = loaded.factory(require)
   check(plugin.name === 'dsh-browser-use-client' && typeof plugin.apply === 'function', 'the factory returns a Cordis plugin face')
@@ -144,10 +144,10 @@ async function checkSwitchForm() {
   for (const effect of effects) effect()
 
   const page = registrations.find(entry => entry.options?.name === 'plugins.row.config')
-  check(page?.options.key === '@weichen96/dsh-browser-use#dsh-browser-use',
+  check(page?.options.key === '@ricardochen1996/dsh-browser-use#dsh-browser-use',
     'the row configuration is keyed by the package and the row id the page looks for')
   const card = registrations.find(entry => entry.options?.name === 'plugins.bundle.config')
-  check(card?.options.key === '@weichen96/dsh-browser-use',
+  check(card?.options.key === '@ricardochen1996/dsh-browser-use',
     'the bundle page card is registered under the bundle name, so the switches show without opening a row')
 
   check(page.component({ view: 'summary', form: undefined }) === null, 'the row summary draws nothing, so the metadata description stands')
