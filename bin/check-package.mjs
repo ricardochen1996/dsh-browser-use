@@ -103,7 +103,7 @@ try {
     assert.ok(inside(report.interpreter.command, environment), report.interpreter.command)
     assert.ok(inside(report.engine.enginePath, environment), report.engine.enginePath)
     assert.equal(report.engine.engine, ${JSON.stringify(engine.version)})
-    assert.deepEqual(report.problems.filter(item => !item.informational && item.code !== 'no_browser'), [])
+    assert.deepEqual(report.problems.filter(item => item.code !== 'no_browser'), [])
     console.log('Installed npm tarball: the bundled engine installs and imports: jev-ultrafast '
       + report.engine.engine + ', Browser Harness ' + report.engine.browserHarness + ', Python ' + report.engine.python + '.')
   `], { cwd: temporary, stdio: 'inherit' })
