@@ -242,7 +242,7 @@ async function checkSwitchForm() {
   const pageFields = pathsOf(page.component({ view: 'page', form }))
   check(JSON.stringify(pageFields) === JSON.stringify([
     'jev.decider',
-    'jev.typesafe.apiKeyEnv', 'jev.typesafe.baseURL', 'jev.typesafe.model',
+    'jev.typesafe.apiKey', 'jev.typesafe.baseURL', 'jev.typesafe.model',
   ].sort()), `the form offers the decider and TypeSafe and nothing else (got ${pageFields.join(', ')})`)
 
   // One switch, two answers: no way to turn Jev off, because who answers it is the only question.
@@ -258,7 +258,7 @@ async function checkSwitchForm() {
 
   // The copy follows the shell's active language: the same registration, the same rows, read twice.
   const englishLabels = labelsOf(page.component({ view: 'page', form }))
-  check(JSON.stringify(englishLabels) === JSON.stringify(['Decider', 'Jev URL', 'Jev Model', 'Jev API key credential']),
+  check(JSON.stringify(englishLabels) === JSON.stringify(['Decider', 'Jev URL', 'Jev Model', 'Jev API key']),
     `the rows read English while English is active (got ${englishLabels.join(', ')})`)
   check(JSON.stringify(controlFor(page.component({ view: 'page', form }), 'jev.decider')
     .find(node => typeof node.props?.onSelect === 'function').props.items.map(item => item.label))
@@ -268,7 +268,7 @@ async function checkSwitchForm() {
     'the hint under the decider reads English too')
   locale.active = 'zh'
   const chineseLabels = labelsOf(page.component({ view: 'page', form }))
-  check(JSON.stringify(chineseLabels) === JSON.stringify(['决策者', 'Jev URL', 'Jev Model', 'Jev API key 凭据名']),
+  check(JSON.stringify(chineseLabels) === JSON.stringify(['决策者', 'Jev URL', 'Jev Model', 'Jev 密钥']),
     `the same rows read Chinese once the active language changes (got ${chineseLabels.join(', ')})`)
   check(hintsOf(page.component({ view: 'page', form }))[0]?.startsWith('Jev 常开'),
     'the hint follows the active language as well')
@@ -284,15 +284,19 @@ async function checkSwitchForm() {
   url.props.onBlur({ target: { value: 'https://gateway.test/systemone' } })
   check(writes[1]?.operations?.[0]?.value === 'https://gateway.test/systemone', 'a typed endpoint is written when the field settles')
 
-  // The credential is named rather than typed in: the row offers the DSH credential name, and the
-  // plaintext key stays a profile-patch setting that never rides a form response.
-  const credential = controlFor(page.component({ view: 'page', form }), 'jev.typesafe.apiKeyEnv').find(node => node.type === 'input')
-  check(credential.props.placeholder === 'OPENCODE_GATEWAY_API_KEY' && credential.props.type === 'text',
-    'the credential row suggests a credential name in a plain text field')
-  credential.props.onBlur({ target: { value: 'OPENCODE_GATEWAY_API_KEY' } })
-  check(writes[2]?.operations?.[0]?.path?.join('.') === 'jev.typesafe.apiKeyEnv'
-    && writes[2].operations[0].value === 'OPENCODE_GATEWAY_API_KEY',
-  'a typed credential name is written when the field settles')
+  // The key itself is typed in, not the name of a credential holding it: one write-only password row,
+  // whose empty draft writes nothing because the Host strips a `role('secret')` field from every
+  // response and an empty draft therefore means "keep what is stored".
+  const key = controlFor(page.component({ view: 'page', form }), 'jev.typesafe.apiKey').find(node => node.type === 'input')
+  check(key.props.placeholder === 'sk-…' && key.props.type === 'password' && key.props.autoComplete === 'new-password',
+    'the Jev key row is a masked field the browser must not autofill')
+  check(key.props.value === '', 'the key field starts blank: a stored key never rides a response')
+  key.props.onBlur({ target: { value: '' } })
+  check(writes.length === 2, 'an empty key field writes nothing, so whatever is stored survives it')
+  key.props.onBlur({ target: { value: 'sk-jev-key' } })
+  check(writes[2]?.operations?.[0]?.path?.join('.') === 'jev.typesafe.apiKey'
+    && writes[2].operations[0].value === 'sk-jev-key' && writes[2].revision === 7,
+  'a pasted Jev key is written to jev.typesafe.apiKey with the revision the page read')
 
   // The bundle page's card reads the namespace itself, so its write goes through that controller.
   const cardElement = card.component({ view: 'page' })

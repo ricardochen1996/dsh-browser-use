@@ -279,14 +279,22 @@ async function engineConfiguration() {
     'session: textModel.model overrides the inherited model and textModel.headers add to the route\u2019s')
   ok((await jev.jevEnvironment(session, composition(profile), owner)).env.TEXT_MODEL_REASONING === 'thinking-disabled',
     'session: reasoning is off by default, so the text model is not asked to think before it types')
-  // The one credential the form asks for is TypeSafe's, and leaving it empty is the simple default:
-  // the conversation's own key is spent there. Naming one spends it on TypeSafe and only there.
+  // The one key the form asks for is Jev's own, and leaving it empty is the simple default: the
+  // conversation's own key is spent there. Naming a credential, or pasting the key, spends it on
+  // TypeSafe and only there.
   const ownKey = { jev: jev.resolveJevConfig({ jev: { typesafe: { apiKeyEnv: 'TYPESAFE_KEY' } } }) }
   const typed = await jev.jevEnvironment(ownKey, composition(profile), owner)
   ok(typed.env.TYPESAFE_API_KEY === 'safe-key' && typed.env.TEXT_MODEL_API_KEY === 'stored-key',
     'session: a TypeSafe credential named in the config is spent on TypeSafe, while the text model keeps the route\u2019s')
   ok(/key from DSH credential TYPESAFE_KEY/u.test(typed.describe[0]),
     'the doctor names where the TypeSafe key came from')
+  // What the settings form writes: the key itself.
+  const pasted = { jev: jev.resolveJevConfig({ jev: { typesafe: { apiKey: 'sk-jev-key' } } }) }
+  const own = await jev.jevEnvironment(pasted, composition(profile), owner)
+  ok(own.env.TYPESAFE_API_KEY === 'sk-jev-key' && own.env.TEXT_MODEL_API_KEY === 'stored-key',
+    'session: a Jev key written in the form is spent on TypeSafe, while the text model keeps the route\u2019s')
+  ok(/key from jev\.typesafe\.apiKey/u.test(own.describe[0]),
+    'the doctor names the form\u2019s key field as where the TypeSafe key came from')
   const status = await jev.jevStatus(session, composition({ ...profile, api: 'anthropic-messages' }), owner)
   ok(/NOT USABLE/u.test(status) && /Anthropic/u.test(status) && !status.includes('stored-key'),
     'the doctor explains why a route cannot be inherited, without printing any key')
@@ -521,8 +529,10 @@ async function settingsForm() {
   const fields = formFields(config.Config).sort()
   ok(JSON.stringify(fields) === JSON.stringify([
     'jev.decider',
-    'jev.typesafe.apiKey', 'jev.typesafe.apiKeyEnv', 'jev.typesafe.baseURL', 'jev.typesafe.model',
+    'jev.typesafe.apiKey', 'jev.typesafe.baseURL', 'jev.typesafe.model',
   ].sort()), `the form offers the decider and the Jev endpoint and nothing else (got ${fields.join(', ')})`)
+  ok(fields.includes('jev.typesafe.apiKey') && !fields.includes('jev.typesafe.apiKeyEnv'),
+    'the form asks for the Jev key itself, never for the name of a credential holding it')
   ok(!fields.includes('mode') && !fields.includes('delegate') && !fields.includes('allowScreenshots')
     && !fields.includes('projectPath') && !fields.includes('reserveBrowserUseSlot'),
   'the switches that decide which tools exist stay profile-patch settings')

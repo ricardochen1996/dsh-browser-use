@@ -320,15 +320,15 @@ Status   : ready
 | --- | --- |
 | `jev.decider` | 由谁回答环路：**Jev**（默认，调下面的端点）或**文本模型**（完全不需要 Jev key） |
 | `jev.typesafe.baseURL` / `.model` | Jev 端点与模型名；由文本模型决策时不生效 |
-| `jev.typesafe.apiKeyEnv` / `.apiKey` | Jev 的 key 从哪来（DSH 凭据名或明文）；**两项都留空就直接花主会话路由的 key** |
+| `jev.typesafe.apiKey` | **Jev 的密钥本身**，直接粘进一个"只写不读"的输入框（Host 不会把 secret 发回来，所以框里永远显示为空；留空 = 保持已存的 key）。**留空就直接花主会话路由的 key** |
 
 **没有"关掉 Jev"这个开关**：`browser_goal` 与 `browser_act` 的 `intent` 就是这个插件提供的能力，人真正要选的只是"由哪个模型回答"。想让它们整个消失，仍可在 profile patch 里写 `jev.enabled: false`。
 
 **文本模型同样不做表单字段**：它就是主会话自己的路由（端点、模型、key、headers），并**关闭推理**——为了往输入框里填一个值，再问你第二个模型该发到哪儿，只会多一个填错的机会。profile patch 里仍可覆盖 `jev.textModel.*`（模型、推理开关、追加 headers）与 `jev.source`，只是表单不问。
 
-`jev.decider` 是 `.volatile()` 的：改完当场生效（下次 `browser_goal` 或带 `intent` 的 `browser_act` 就用新值），`apiKey` 以 `role('secret')` 提交、不出现在任何表单响应里，表单里留空就表示不动已存的 key。
+`jev.decider` 与 `jev.typesafe.apiKey` 都是 `.volatile()` 的：改完当场生效（下次 `browser_goal` 或带 `intent` 的 `browser_act` 就用新值）。key 以 `role('secret')` 提交，永远不出现在任何表单响应里：输入框每次都是空的，留空表示不动已存的 key，写入成功会显示「已写入」。想**删掉**已存的 key，就从 profile patch 里删掉那一行。
 
-**其余开关都在 profile patch 里改**（改完 DSH 会重挂插件，和以前一样）：`mode`、`cdpEndpoint`、`executablePath`、`userDataDir`、`headless`、`allowScreenshots`、`requestTimeoutMs`、`delegate`、`delegateMode`、`subagentProvider`、`maxDepth`、`projectPath`、`pythonPath`、`reserveBrowserUseSlot`、`jev.enabled`、`jev.typesafe.fallbackURL`、`jev.source`、`jev.textModel.baseURL`、`jev.textModel.model`、`jev.textModel.reasoning`、`jev.textModel.headers`、`jev.textModel.apiKey` / `.apiKeyEnv`。它们决定**有哪些工具**、跑哪个解释器、占不占组合槽位，或者描述一个本不该让人操心的文本模型——做成表单字段等于承诺一个做不到的"立即生效"。
+**其余开关都在 profile patch 里改**（改完 DSH 会重挂插件，和以前一样）：`mode`、`cdpEndpoint`、`executablePath`、`userDataDir`、`headless`、`allowScreenshots`、`requestTimeoutMs`、`delegate`、`delegateMode`、`subagentProvider`、`maxDepth`、`projectPath`、`pythonPath`、`reserveBrowserUseSlot`、`jev.enabled`、`jev.typesafe.fallbackURL`、`jev.typesafe.apiKeyEnv`、`jev.source`、`jev.textModel.baseURL`、`jev.textModel.model`、`jev.textModel.reasoning`、`jev.textModel.headers`、`jev.textModel.apiKey` / `.apiKeyEnv`。它们决定**有哪些工具**、跑哪个解释器、占不占组合槽位，或者描述一个本不该让人操心的文本模型——做成表单字段等于承诺一个做不到的"立即生效"。`jev.typesafe.apiKeyEnv` 仍留给"不想把 key 写进 profile 文件、只想**指名**一份已存凭据（Models 页存的 DSH 凭据，或环境变量名）"的 patch；往这一项里直接粘密钥会被拒绝，并给出该写哪儿的提示。
 
 改完一次之后，下面的 YAML 写法仍然有效（也是 `projectPath` 这类字段唯一的入口）：
 
@@ -343,7 +343,9 @@ Status   : ready
       typesafe:
         baseURL: https://opencode.ai/zen/v1/systemone
         model: jev-1.13
-        # apiKeyEnv: OPENCODE_GATEWAY_API_KEY   # 不写就直接花主会话路由的 key
+        # apiKey: sk-…            # Jev 的密钥本身——表单写的就是这一项
+        # apiKeyEnv: OPENCODE_GATEWAY_API_KEY   # 或者指名一份 DSH 凭据 / 环境变量
+        # 两项都不写，就直接花主会话路由的 key
       # enabled: false           # 收回 browser_goal 与 browser_act 的 intent；默认就是开放
 ```
 
@@ -356,7 +358,7 @@ Status   : ready
         headers: { x-opencode-session: dsh-harness }   # 追加在路由自己的 headers 之后
 ```
 
-**`source: session`（默认：从主会话继承）**：每次调用 `browser_goal` 或带 `intent` 的 `browser_act` 时读取**当前对话正在用的模型路由**（切了模型也跟着变）——文本模型用该路由的 `baseURL`、`headers`、模型名和 key（该 provider 配置里 `apiKeyEnv` 指向的 DSH 凭据）；Jev 花的也是这个 key，除非 `jev.typesafe.apiKeyEnv` / `.apiKey` 另指了一个，端点取 `jev.typesafe.baseURL`（Jev 端点无法从聊天路由推出来）。以下情况会拒绝并给出修复提示：路由是 Anthropic 协议、没有 `baseURL`、用登录态而非 API key（如 DeepSeek 账号登录）、对话还没选模型。
+**`source: session`（默认：从主会话继承）**：每次调用 `browser_goal` 或带 `intent` 的 `browser_act` 时读取**当前对话正在用的模型路由**（切了模型也跟着变）——文本模型用该路由的 `baseURL`、`headers`、模型名和 key（该 provider 配置里 `apiKeyEnv` 指向的 DSH 凭据）；Jev 花的也是这个 key，除非 `jev.typesafe.apiKey`（表单里那个密钥框）或 `.apiKeyEnv` 另给了一个，端点取 `jev.typesafe.baseURL`（Jev 端点无法从聊天路由推出来）。以下情况会拒绝并给出修复提示：路由是 Anthropic 协议、没有 `baseURL`、用登录态而非 API key（如 DeepSeek 账号登录）、对话还没选模型。
 
 **`source: custom`（只在 profile patch 里：给文本模型单独配一套）**：
 
@@ -367,7 +369,7 @@ Status   : ready
       typesafe:
         baseURL: https://opencode.ai/zen/v1/systemone
         model: jev-1.13
-        apiKeyEnv: OPENCODE_GATEWAY_API_KEY   # DSH 凭据（Models 页存的）或 DSH 环境变量的名字
+        apiKey: sk-…                          # Jev 的密钥本身（也可以 apiKeyEnv: 指名一份凭据）
       textModel:
         baseURL: https://opencode.ai/zen/go/v1
         model: deepseek-flash
@@ -400,7 +402,7 @@ Status   : ready
 | `reserveBrowserUseSlot` | `true` | 占用 `ctx.browserUse` 单例槽（该服务被挂载时） |
 | `jev.enabled` ✎ | `false` | 开放 `browser_goal` 与 `browser_act` 的 `intent`（花模型额度）；旧名 `allowGoalMode` |
 | `jev.decider` ✎ | `typesafe` | 谁回答环路里的问题：`typesafe` 调下面那个端点；`chat` 在本地起引擎的 chat 决策端点、由文本模型回答，不需要 Jev key |
-| `jev.typesafe` | 引擎默认 | Jev 端点：`baseURL`、`model` ✎、key（`apiKey` / `apiKeyEnv` ✎，留空 = 花主会话路由的 key）以及 `fallbackURL`（只在 YAML）。`decider: chat` 时不使用 |
+| `jev.typesafe` | 引擎默认 | Jev 端点：`baseURL`、`model` ✎、密钥本身 `apiKey` ✎（表单里那个只写不读的密钥框；`apiKeyEnv` 则是指名一份凭据，只在 YAML；留空 = 花主会话路由的 key）以及 `fallbackURL`（只在 YAML）。`decider: chat` 时不使用 |
 | `jev.source` | `session` | **文本模型**从哪来：`session`（对话自己的路由）或 `custom`（用下面的 `jev.textModel` 端点与 key）。不做表单字段：表单的简单用法就是默认值 |
 | `jev.textModel` | 对话自己的路由 | 文本模型的覆盖项：`model`、`reasoning`（默认 `thinking-disabled`）、`headers`；`custom` 时另加 `baseURL`、`apiKeyEnv` / `apiKey`。同样不做表单字段 |
 | `allowScreenshots` | `true` | 开放 `browser_screenshot` |

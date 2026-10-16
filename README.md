@@ -320,15 +320,15 @@ The form is deliberately one question and the endpoint it may need — and nothi
 | --- | --- |
 | `jev.decider` | who answers the loop: **Jev** (the default; calls the endpoint below) or **the text model** (which needs no Jev key at all) |
 | `jev.typesafe.baseURL` / `.model` | the Jev endpoint and model name; unused when the text model decides |
-| `jev.typesafe.apiKeyEnv` / `.apiKey` | where Jev's key comes from (a DSH credential name, or plaintext); **leave both empty to spend the main conversation's own key there** |
+| `jev.typesafe.apiKey` | **Jev's key itself**, typed or pasted into a write-only field (the Host never sends a secret back, so it always reads blank; a blank field keeps whatever is stored). **Leave it empty to spend the main conversation's own key there** |
 
 **There is no switch to turn Jev off.** `browser_goal` and `browser_act`'s intent are part of what this plugin offers, and the only question a person has is which of two models answers them. A profile patch that wants the tools withdrawn entirely can still say `jev.enabled: false`.
 
 The **text model is not a form field** either, on purpose: it is the main conversation's own route — endpoint, model, key and headers — with **reasoning off**, because asking a second question about where to send a value you are typing into a field is only a way to get it wrong. A profile patch can still override `jev.textModel.*` (model, reasoning, extra headers) and `jev.source`; the form never asks for them.
 
-`jev.decider` is `.volatile()`: a change takes effect on the spot (the next `browser_goal` or intent-bearing `browser_act` uses the new value); `apiKey` is submitted with `role('secret')` and never appears in any form response, and leaving it blank in the form means "don't touch the stored key".
+`jev.decider` and `jev.typesafe.apiKey` are `.volatile()`: a change takes effect on the spot (the next `browser_goal` or intent-bearing `browser_act` uses the new value). The key is submitted with `role('secret')`, so it never appears in any form response: the field starts blank every time, a blank one means "don't touch the stored key", and a write that lands answers `Saved`. To **remove** a key again, delete its line from the profile patch.
 
-**All other switches are changed in the profile patch** (after which DSH remounts the plugin, as before): `mode`, `cdpEndpoint`, `executablePath`, `userDataDir`, `headless`, `allowScreenshots`, `requestTimeoutMs`, `delegate`, `delegateMode`, `subagentProvider`, `maxDepth`, `projectPath`, `pythonPath`, `reserveBrowserUseSlot`, `jev.enabled`, `jev.typesafe.fallbackURL`, `jev.source`, `jev.textModel.baseURL`, `jev.textModel.model`, `jev.textModel.reasoning`, `jev.textModel.headers`, `jev.textModel.apiKey` / `.apiKeyEnv`. They decide **which tools exist**, which interpreter runs, and whether a composition slot is taken — or describe a text model a person should not have to think about — making them form fields would promise an "immediate effect" that can't be delivered.
+**All other switches are changed in the profile patch** (after which DSH remounts the plugin, as before): `mode`, `cdpEndpoint`, `executablePath`, `userDataDir`, `headless`, `allowScreenshots`, `requestTimeoutMs`, `delegate`, `delegateMode`, `subagentProvider`, `maxDepth`, `projectPath`, `pythonPath`, `reserveBrowserUseSlot`, `jev.enabled`, `jev.typesafe.fallbackURL`, `jev.typesafe.apiKeyEnv`, `jev.source`, `jev.textModel.baseURL`, `jev.textModel.model`, `jev.textModel.reasoning`, `jev.textModel.headers`, `jev.textModel.apiKey` / `.apiKeyEnv`. They decide **which tools exist**, which interpreter runs, and whether a composition slot is taken — or describe a text model a person should not have to think about — making them form fields would promise an "immediate effect" that can't be delivered. `jev.typesafe.apiKeyEnv` stays available for a patch that would rather **name** a stored credential (a DSH credential from the Models page, or an environment variable) than keep the key in the profile file; naming the key there instead is refused, with the fix.
 
 After a first pass through the UI, the YAML form below still works (and is the only entry point for fields like `projectPath`):
 
@@ -343,7 +343,9 @@ Write it into the `config:` of the `id: dsh-browser-use` line in the profile's `
       typesafe:
         baseURL: https://opencode.ai/zen/v1/systemone
         model: jev-1.13
-        # apiKeyEnv: OPENCODE_GATEWAY_API_KEY   # leave it out and the main conversation's own key is spent here
+        # apiKey: sk-…            # the Jev key itself — this is what the form writes
+        # apiKeyEnv: OPENCODE_GATEWAY_API_KEY   # or name a DSH credential / env var holding it
+        # without either, the main conversation's own key is spent here
       # enabled: false           # withdraw browser_goal and browser_act's intent; they are offered by default
 ```
 
@@ -356,7 +358,7 @@ That is the whole configuration a person needs: **the text model is the conversa
         headers: { x-opencode-session: dsh-harness }   # added to the route's own headers
 ```
 
-**`source: session` (the default: inherit from the main conversation)**: on each `browser_goal` or intent-bearing `browser_act`, it reads the **model route the conversation is currently using** (it follows you when you switch models) — the text model uses that route's `baseURL`, `headers`, model name and key (the DSH credential the provider config's `apiKeyEnv` points at); Jev uses that same key unless `jev.typesafe.apiKeyEnv` / `.apiKey` names one of its own, with its endpoint from `jev.typesafe.baseURL` (the Jev endpoint can't be inferred from a chat route). It refuses with a fix hint when: the route is the Anthropic protocol, has no `baseURL`, uses a login session rather than an API key (e.g. a DeepSeek account login), or the conversation hasn't picked a model yet.
+**`source: session` (the default: inherit from the main conversation)**: on each `browser_goal` or intent-bearing `browser_act`, it reads the **model route the conversation is currently using** (it follows you when you switch models) — the text model uses that route's `baseURL`, `headers`, model name and key (the DSH credential the provider config's `apiKeyEnv` points at); Jev uses that same key unless `jev.typesafe.apiKey` (the form's key field) or `.apiKeyEnv` supplies one of its own, with its endpoint from `jev.typesafe.baseURL` (the Jev endpoint can't be inferred from a chat route). It refuses with a fix hint when: the route is the Anthropic protocol, has no `baseURL`, uses a login session rather than an API key (e.g. a DeepSeek account login), or the conversation hasn't picked a model yet.
 
 **`source: custom` (a profile patch only: its own text model)**:
 
@@ -366,7 +368,7 @@ That is the whole configuration a person needs: **the text model is the conversa
       typesafe:
         baseURL: https://opencode.ai/zen/v1/systemone
         model: jev-1.13
-        apiKeyEnv: OPENCODE_GATEWAY_API_KEY   # name of a DSH credential (stored on the Models page) or a DSH env var
+        apiKey: sk-…                          # the Jev key itself (apiKeyEnv: a credential name works too)
       textModel:
         baseURL: https://opencode.ai/zen/go/v1
         model: deepseek-flash
@@ -398,7 +400,7 @@ In every mode, the endpoint and key used by `browser_goal` and `browser_act`'s `
 | `reserveBrowserUseSlot` | `true` | take the `ctx.browserUse` singleton slot (when that service is mounted) |
 | `jev.enabled` | `true` | offer `browser_goal` and `browser_act`'s `intent` at all; `false` withdraws them and resolves nothing. No form field — the page has no off switch; old name `allowGoalMode` |
 | `jev.decider` ✎ | `typesafe` | who answers the loop's questions: `typesafe` calls the Jev endpoint below; `chat` serves the engine's chat-model endpoint on loopback so the text model decides, with no Jev key |
-| `jev.typesafe` | engine default | the Jev endpoint: `baseURL`, `model` ✎, the key (`apiKey` / `apiKeyEnv` ✎; empty = spend the main conversation route's key) and `fallbackURL` (YAML-only). Unused with `decider: chat` |
+| `jev.typesafe` | engine default | the Jev endpoint: `baseURL`, `model` ✎, the key itself in `apiKey` ✎ (the form's write-only field; `apiKeyEnv` names a credential instead, YAML-only; empty = spend the main conversation route's key) and `fallbackURL` (YAML-only). Unused with `decider: chat` |
 | `jev.source` | `session` | where the *text model* comes from: `session` (the conversation's route) or `custom` (the `jev.textModel` endpoint and key below). No form field: the form's simple case is the default |
 | `jev.textModel` | the conversation's route | overrides for the text model: `model`, `reasoning` (default `thinking-disabled`), `headers`; `custom` also uses `baseURL`, `apiKeyEnv` / `apiKey`. No form field, as above |
 | `allowScreenshots` | `true` | enable `browser_screenshot` |
