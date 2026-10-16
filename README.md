@@ -12,7 +12,7 @@ This is a **DSH plugin** (a host half + a web half). It contains no browser logi
 
 ## ⚡ The point: speed
 
-The focus is **fast browser decisions**. Jev (TypeSafe System One) picks an operation and target from the current action table; a text model supplies values only when needed for `TYPE_TEXT`. `browser_goal` runs the decision loop inside the engine. `browser_act({ observation, intent })` delegates one decision to Jev, but still returns to its calling agent after each step. Enabling Jev makes these paths available; it does not automatically replace every chat-model turn.
+The focus is **fast browser decisions**. Jev picks an operation and target from the current action table; a text model supplies values only when needed for `TYPE_TEXT`. `browser_goal` runs the decision loop inside the engine. `browser_act({ observation, intent })` delegates one decision to Jev — or, with `jev.decider: chat`, to the text model — but still returns to its calling agent after each step. Jev is always available; it does not automatically replace every chat-model turn.
 
 <img src="docs/speed.en.svg" alt="Same task: Jev on ~10.7s, Jev off ~24.6–26.7s" width="100%" />
 
@@ -26,7 +26,7 @@ The same local hotel task (type a city, tick two filters, search, open a result)
 
 **In this decision-loop benchmark, Jev took about 60% less time than the max-reasoning arm** (26.7 s / 10.7 s ≈ 2.5). Median per-step decision latency was 1.1 s versus 2.8–3.6 s.
 
-<img src="docs/how-it-works.en.svg" alt="Jev off: every step is a full chat-model turn; Jev on: every step is one TypeSafe choice" width="100%" />
+<img src="docs/how-it-works.en.svg" alt="Jev off: every step is a full chat-model turn; Jev on: every step is one policy choice" width="100%" />
 
 > Measured on 2026-09-30: three arms, three completed runs each, all independently verified; one transport failure was recorded and retried. The clock runs from the first decision after page opening to DONE/finish. The script directly loops over the sidecar's intent path versus lean Responses API tool-calling turns using `deepseek-v4.1-flash`, the model configured in DSH at measurement time. This is **not an end-to-end DSH toggle comparison**: it excludes browser startup, initial navigation, post-run verification, DSH delegation and outer chat round-trips. Three runs of one local task do not establish a universal speedup. The Jev text helper uses the same model with thinking disabled; session mode shares routing settings, not necessarily protocol or reasoning settings. See [`bench/`](bench/) for the script and raw data. The benchmark spends model quota and reads credentials only from environment variables.
 
@@ -68,10 +68,10 @@ The browser tools live in the **delegated subagent's scope** (6 by default, with
 | --- | --- |
 | `browser_open` | Open a page in the **browser this Session owns** and return the action-space table. |
 | `browser_page` | Re-observe and produce a new observation number. |
-| `browser_act` | Run one operation on one target from an observation: `CLICK` / `TYPE_TEXT` / `SELECT` / `SCROLL_UP` / `SCROLL_DOWN` / `WAIT`. With jev on you may instead pass an `intent`: with no `operation`, TypeSafe picks the operation and target on that observation; a `TYPE_TEXT` with no `text` gets its value from the jev text model. |
+| `browser_act` | Run one operation on one target from an observation: `CLICK` / `TYPE_TEXT` / `SELECT` / `SCROLL_UP` / `SCROLL_DOWN` / `WAIT`. With jev on you may instead pass an `intent`: with no `operation`, the policy picks the operation and target on that observation; a `TYPE_TEXT` with no `text` gets its value from the text model. |
 | `browser_screenshot` | Capture the viewport (image attachment). |
 | `browser_console` | Read console messages, page exceptions, failed requests and 4xx/5xx. |
-| `browser_goal` | Hand the whole goal to the TypeSafe policy in one run (**off by default**, spends paid quota). |
+| `browser_goal` | Hand the whole goal to the browser policy in one run: it picks every operation and target itself (spends paid quota; `jev.decider` says whether Jev or the text model answers). |
 | `browser_close` | Close the tab, browser and daemon. |
 
 **Keep delegating without opening a pile of `browser_task`s.** The plugin uses DSH's native continuable subagent (`ctx.subagents.startContinuable` / `sendMessage`); each conversation has exactly one browser subagent:
@@ -144,7 +144,7 @@ A launch leaves exactly **one** tab: the browser opens a startup tab, and the co
 The host half is plain ESM; the web half is a hand-written `__ModuleLoader__` script — no tsdown/rollup step. Clone it, `pnpm install` once (only for `@deepseek-ai/schemastery`, used by the Config schema), then edit and restart.
 
 ### 10. Capabilities can be turned off
-`allowScreenshots`, `jev.enabled` and `reserveBrowserUseSlot` are all config options. Turn off `jev.enabled` to keep decisions with the calling model. The Jev settings are editable under **Sidebar → Plugins → `@ricardochen1996/dsh-browser-use`**; `allowScreenshots` and `reserveBrowserUseSlot` are profile-patch settings.
+`allowScreenshots` and `reserveBrowserUseSlot` are config options, and `jev.enabled: false` in a profile patch withdraws the Jev tools (`browser_goal`, and `browser_act`'s intent) so decisions stay with the calling model — the settings page itself has no such switch. The Jev settings are editable under **Sidebar → Plugins → `@ricardochen1996/dsh-browser-use`**; `allowScreenshots` and `reserveBrowserUseSlot` are profile-patch settings.
 
 ---
 
@@ -314,20 +314,21 @@ The `browser_doctor` tool returns the same report plus the current Session's bro
 - **Sidebar → Plugins → open `@ricardochen1996/dsh-browser-use`**: the toggles are drawn right above "Included components" (the plugin page's own config area).
 - On the same page, **the `dsh-browser-use` row title is itself a "Configure" button** (with a `>` arrow, accessible name `Configure @ricardochen1996/dsh-browser-use`) — it opens the same form.
 
-The form has **only the jev group**, drawn with the shell's own components in the same row layout as other plugins:
+The form is deliberately one question and the endpoint it may need — and nothing else, drawn with the shell's own components in the same row layout as other plugins:
 
 | Field in the form | Meaning |
 | --- | --- |
-| `jev.enabled` | Enable `browser_goal` and `browser_act`'s `intent` (spends TypeSafe and text-model quota) |
-| `jev.source` | `session` inherits the main conversation; `custom` uses the URL/key you fill in below |
-| `jev.typesafe.baseURL` / `.model` / `.apiKeyEnv` / `.apiKey` | TypeSafe endpoint, model name, key (credential name or plaintext) |
-| `jev.textModel.baseURL` / `.model` / `.apiKeyEnv` / `.apiKey` | text-model endpoint, model name, key |
+| `jev.decider` | who answers the loop: **Jev** (the default; calls the endpoint below) or **the text model** (which needs no Jev key at all) |
+| `jev.typesafe.baseURL` / `.model` | the Jev endpoint and model name; unused when the text model decides |
+| `jev.typesafe.apiKeyEnv` / `.apiKey` | where Jev's key comes from (a DSH credential name, or plaintext); **leave both empty to spend the main conversation's own key there** |
 
-These fields are `.volatile()`: a change takes effect on the spot (the next `browser_goal` or intent-bearing `browser_act` uses the new value); `apiKey` is submitted with `role('secret')` and never appears in any form response, and leaving it blank in the form means "don't touch the stored key".
+**There is no switch to turn Jev off.** `browser_goal` and `browser_act`'s intent are part of what this plugin offers, and the only question a person has is which of two models answers them. A profile patch that wants the tools withdrawn entirely can still say `jev.enabled: false`.
 
-**All other switches are changed in the profile patch** (after which DSH remounts the plugin, as before): `mode`, `cdpEndpoint`, `executablePath`, `userDataDir`, `headless`, `allowScreenshots`, `requestTimeoutMs`, `delegate`, `delegateMode`, `subagentProvider`, `maxDepth`, `projectPath`, `pythonPath`, `reserveBrowserUseSlot`, `jev.typesafe.fallbackURL`, `jev.textModel.reasoning`, `jev.textModel.headers`. They decide **which tools exist**, which interpreter runs, and whether a composition slot is taken — making them form fields would promise an "immediate effect" that can't be delivered.
+The **text model is not a form field** either, on purpose: it is the main conversation's own route — endpoint, model, key and headers — with **reasoning off**, because asking a second question about where to send a value you are typing into a field is only a way to get it wrong. A profile patch can still override `jev.textModel.*` (model, reasoning, extra headers) and `jev.source`; the form never asks for them.
 
-One known edge: `jev.enabled` changes the tool set, and the conversation's own tool surface rebuilds immediately; but an already-running persistent browser subagent keeps the tools it was composed with, until it is swapped with `fresh: true` or the plugin is remounted (the `browser_doctor` Jev line always reflects the current config).
+`jev.decider` is `.volatile()`: a change takes effect on the spot (the next `browser_goal` or intent-bearing `browser_act` uses the new value); `apiKey` is submitted with `role('secret')` and never appears in any form response, and leaving it blank in the form means "don't touch the stored key".
+
+**All other switches are changed in the profile patch** (after which DSH remounts the plugin, as before): `mode`, `cdpEndpoint`, `executablePath`, `userDataDir`, `headless`, `allowScreenshots`, `requestTimeoutMs`, `delegate`, `delegateMode`, `subagentProvider`, `maxDepth`, `projectPath`, `pythonPath`, `reserveBrowserUseSlot`, `jev.enabled`, `jev.typesafe.fallbackURL`, `jev.source`, `jev.textModel.baseURL`, `jev.textModel.model`, `jev.textModel.reasoning`, `jev.textModel.headers`, `jev.textModel.apiKey` / `.apiKeyEnv`. They decide **which tools exist**, which interpreter runs, and whether a composition slot is taken — or describe a text model a person should not have to think about — making them form fields would promise an "immediate effect" that can't be delivered.
 
 After a first pass through the UI, the YAML form below still works (and is the only entry point for fields like `projectPath`):
 
@@ -338,23 +339,29 @@ Write it into the `config:` of the `id: dsh-browser-use` line in the profile's `
   config:
     # projectPath: /absolute/path/to/jev-ultrafast   # only to run an engine checkout instead of the bundled engine
     jev:
-      enabled: true              # enable browser_goal and browser_act's intent; when false nothing is resolved and no key is sent
-      source: session            # session: inherit the main conversation; custom: configure it yourself
+      decider: typesafe          # typesafe: Jev answers the loop; chat: the text model answers, and no Jev key is needed
       typesafe:
         baseURL: https://opencode.ai/zen/v1/systemone
         model: jev-1.13
-      textModel:
-        reasoning: thinking-disabled
-        headers: { x-opencode-session: dsh-harness }
+        # apiKeyEnv: OPENCODE_GATEWAY_API_KEY   # leave it out and the main conversation's own key is spent here
+      # enabled: false           # withdraw browser_goal and browser_act's intent; they are offered by default
 ```
 
-**`source: session` (inherit from the main conversation)**: on each `browser_goal` or intent-bearing `browser_act`, it reads the **model route the conversation is currently using** (it follows you when you switch models) — the text model uses that route's `baseURL`, `headers`, model name and key (the DSH credential the provider config's `apiKeyEnv` points at); TypeSafe uses the same key, with its endpoint from `jev.typesafe.baseURL` (the TypeSafe endpoint can't be inferred from a chat route). You can only override `typesafe.baseURL/model/fallbackURL`, `textModel.model` (blank = the main conversation's model), `textModel.reasoning` and appended `textModel.headers`. It refuses with a fix hint when: the route is the Anthropic protocol, has no `baseURL`, uses a login session rather than an API key (e.g. a DeepSeek account login), or the conversation hasn't picked a model yet.
+That is the whole configuration a person needs: **the text model is the conversation's own route**, with reasoning off and the provider's headers, and it follows the conversation when you switch models. The two optional overrides a profile patch may add are `source: custom` (the block below) and `jev.textModel.*`:
 
-**`source: custom` (configure separately)**:
+```yaml
+      textModel:
+        model: deepseek-flash                    # blank = the main conversation's model
+        reasoning: thinking-disabled             # the default; "none" sends reasoning: {enabled: false} instead
+        headers: { x-opencode-session: dsh-harness }   # added to the route's own headers
+```
+
+**`source: session` (the default: inherit from the main conversation)**: on each `browser_goal` or intent-bearing `browser_act`, it reads the **model route the conversation is currently using** (it follows you when you switch models) — the text model uses that route's `baseURL`, `headers`, model name and key (the DSH credential the provider config's `apiKeyEnv` points at); Jev uses that same key unless `jev.typesafe.apiKeyEnv` / `.apiKey` names one of its own, with its endpoint from `jev.typesafe.baseURL` (the Jev endpoint can't be inferred from a chat route). It refuses with a fix hint when: the route is the Anthropic protocol, has no `baseURL`, uses a login session rather than an API key (e.g. a DeepSeek account login), or the conversation hasn't picked a model yet.
+
+**`source: custom` (a profile patch only: its own text model)**:
 
 ```yaml
     jev:
-      enabled: true
       source: custom
       typesafe:
         baseURL: https://opencode.ai/zen/v1/systemone
@@ -368,7 +375,16 @@ Write it into the `config:` of the `id: dsh-browser-use` line in the profile's `
         apiKeyEnv: OPENCODE_GATEWAY_API_KEY   # or apiKey: plaintext (not recommended)
 ```
 
-In both modes, the endpoint and key used by `browser_goal` and `browser_act`'s `intent` come **only from the plugin config / main conversation**: the sidecar does not read the engine checkout's `.env`, and any `TYPESAFE_*` / `TEXT_MODEL_*` in the DSH process environment are cleared before the sidecar starts; the key is passed per request to the sidecar and is visible only during that run. `browser_doctor` shows the jev status and key source (never the key itself). The old `allowGoalMode: true` is still equivalent to `jev.enabled: true`.
+**`decider: chat` (run with no Jev key at all)**: the sidecar serves the engine's own chat-model endpoint on loopback for that one call and points the engine's Jev variables at it, so the **text model decides** the operation and the target — which by default is the conversation's own route, so `browser_goal` and intent-bearing `browser_act` work with nothing but the chat key you already have. Nothing in `jev.typesafe` is read; a value left there is simply unused, and the doctor's Jev line says so. It is the way to run without a Jev key, not the fast path: the engine's own measurements put this mode at 10–14 s and 2 of 3 runs where the hosted model took about 5 s and 2 of 2.
+
+```yaml
+    jev:
+      decider: chat              # the text model answers; jev.typesafe is not used
+      textModel:
+        model: deepseek-flash    # blank = the main conversation's model
+```
+
+In every mode, the endpoint and key used by `browser_goal` and `browser_act`'s `intent` come **only from the plugin config / main conversation**: the sidecar does not read the engine checkout's `.env`, and any `TYPESAFE_*` / `TEXT_MODEL_*` in the DSH process environment are cleared before the sidecar starts; the key is passed per request to the sidecar and is visible only during that run. `browser_doctor` shows the jev status, the decider and the key source (never the key itself). The old `allowGoalMode: true` is still equivalent to `jev.enabled: true`.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
@@ -380,10 +396,11 @@ In both modes, the endpoint and key used by `browser_goal` and `browser_act`'s `
 | `userDataDir` | one per Session (`~/.jev-ultrafast/browser/<session>`) | dedicated profile directory |
 | `headless` | `false` | launch without a window |
 | `reserveBrowserUseSlot` | `true` | take the `ctx.browserUse` singleton slot (when that service is mounted) |
-| `jev.enabled` ✎ | `false` | enable `browser_goal` and `browser_act`'s `intent` (spends TypeSafe and text-model quota); old name `allowGoalMode` |
-| `jev.source` ✎ | `session` | `session` inherits the main conversation's route and key; `custom` uses the `baseURL`/key you configure below |
-| `jev.typesafe` | engine default | TypeSafe endpoint: `baseURL`, `model`, `fallbackURL`; add `apiKeyEnv` / `apiKey` for `custom`. The form has the first two plus two key fields; `fallbackURL` is YAML-only |
-| `jev.textModel` | main conversation / engine default | text model (OpenAI-compatible): `model`, `reasoning` (`none` / `thinking-disabled`), `headers`; add `baseURL`, `apiKeyEnv` / `apiKey` for `custom`. The form has `baseURL` / `model` plus two key fields; `reasoning` / `headers` are YAML-only |
+| `jev.enabled` | `true` | offer `browser_goal` and `browser_act`'s `intent` at all; `false` withdraws them and resolves nothing. No form field — the page has no off switch; old name `allowGoalMode` |
+| `jev.decider` ✎ | `typesafe` | who answers the loop's questions: `typesafe` calls the Jev endpoint below; `chat` serves the engine's chat-model endpoint on loopback so the text model decides, with no Jev key |
+| `jev.typesafe` | engine default | the Jev endpoint: `baseURL`, `model` ✎, the key (`apiKey` / `apiKeyEnv` ✎; empty = spend the main conversation route's key) and `fallbackURL` (YAML-only). Unused with `decider: chat` |
+| `jev.source` | `session` | where the *text model* comes from: `session` (the conversation's route) or `custom` (the `jev.textModel` endpoint and key below). No form field: the form's simple case is the default |
+| `jev.textModel` | the conversation's route | overrides for the text model: `model`, `reasoning` (default `thinking-disabled`), `headers`; `custom` also uses `baseURL`, `apiKeyEnv` / `apiKey`. No form field, as above |
 | `allowScreenshots` | `true` | enable `browser_screenshot` |
 | `requestTimeoutMs` | `180000` | per-request cap for the sidecar |
 | `delegate` | `true` | hand browser operations to a subagent; when `false`, mount them on this conversation (direct mode) |
@@ -391,7 +408,7 @@ In both modes, the endpoint and key used by `browser_goal` and `browser_act`'s `
 | `subagentProvider` | `spawn` | the provider name in `ctx.subagents`; it must be able to compose an **in-process** subagent, otherwise it falls back to direct mode |
 | `maxDepth` | `0` | delegation-depth cap for the subagent; `0` means use the provider's own recursion budget |
 
-✎ = appears in the form under **Sidebar → Plugins → `@ricardochen1996/dsh-browser-use`** (the package page, or the "Configure" in the row title), with immediate effect (the next time the value is used); fields without ✎ are set only in the profile patch.
+✎ = appears in the form under **Sidebar → Plugins → `@ricardochen1996/dsh-browser-use`** (the package page, or the "Configure" in the row title), with immediate effect (the next time the value is used); fields without ✎ are set only in the profile patch. The form is bilingual: its labels, hints and refusals come from the shell's own locale service, so it reads **English** or **中文** with the interface.
 
 ## 6. Verify (spends nothing)
 
@@ -467,7 +484,7 @@ DSH host (Node)                                        ← this repo's lib/
   sidecar/bridge.py                                    ← this repo's sidecar/
       ├─ Browser.observe / Browser.act / screenshot / settle   (the engine's existing executor)
       ├─ model.choose / field_text (browser_act with an intent, single step)
-      └─ Agent + TypeSafe policy (browser_goal, the whole goal)
+      └─ Agent + the Jev policy (browser_goal, the whole goal)
                          │  CDP
                          ▼
                    a dedicated Chrome instance (one profile per Session)
@@ -484,7 +501,7 @@ engine = jev_ultrafast (a separate repo; a wheel of it ships in vendor/), import
 - Changing the plugin code requires a **DSH restart** to take effect.
 - No `browser_eval` / coordinate input — turning model output into code would break this project's first principle.
 - Page state doesn't survive Session recovery: resume/fork opens a new browser (as the DSH provider contract requires).
-- `browser_goal` and intent-bearing `browser_act` spend TypeSafe and text-model quota, which DSH's usage stats don't see.
+- `browser_goal` and intent-bearing `browser_act` spend model quota (Jev, or the text model when it decides), which DSH's usage stats don't see.
 - **Delegation needs a subagent provider in the composition** (e.g. `@deepseek-ai/dsh-subagent-spawn-in-process` that can compose in-process subagents). Without one it falls back to direct mode: a WARN in the log, and the `browser_doctor` `Delegation:` line explains why. The standard DSH base bundle mounts `spawn` by default; if the provider appears **after** the plugin loads, a DSH restart is needed to enter delegation mode.
 - The subagent is restricted to the browser tools plus `send_message` (other global tools are blocked by the allow list): it can click pages and message the main agent, but can't touch your files or shell.
 - The persistent subagent's context accumulates across tasks; when it grows too long or drifts, swap it with `browser_task({ fresh: true, … })` (the old one is interrupted, the browser kept). In one-shot mode the subagent is released when its task ends.

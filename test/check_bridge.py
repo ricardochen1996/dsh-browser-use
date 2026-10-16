@@ -3,6 +3,10 @@
 Run with ``uv run python test/check_bridge.py``. It starts the sidecar as a child process exactly
 as the plugin does, drives the engine's local fixture page over the line-delimited JSON protocol, and
 checks the outcome on the page itself rather than trusting the reported action.
+
+One step uses a chat decider (``jev.decider: chat``), whose model is a stub this test serves on
+loopback: the sidecar, the engine's decision endpoint, and the OpenAI-compatible protocol between
+them are all real, but nothing leaves the machine and no key is needed.
 """
 
 import json
@@ -10,6 +14,9 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
@@ -85,6 +92,56 @@ def target(page, operation, element_index, option=None):
     raise AssertionError(f"{operation} offered no target for element {element_index}: {page['operations']}")
 
 
+@contextmanager
+def stub_chat_model():
+    """A chat model on loopback, answering both shapes the engine asks a text model for.
+
+    The engine posts one decision question per step (the payload carries the offered ``actions``) and,
+    for a TYPE_TEXT step whose target it chose, one question for the value to enter. The stub reads the
+    goal out of the offer, picks the destination field the way a model would, and nothing else.
+    """
+    chosen = []
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *arguments):
+            pass
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            messages = body.get("messages") or []
+            try:
+                payload = json.loads(messages[-1].get("content") or "")
+            except (ValueError, IndexError):
+                payload = None
+            if isinstance(payload, dict) and "actions" in payload:
+                actions = payload["actions"]
+                choice = next((key for key in actions
+                               if key.startswith("TYPE_TEXT ") and "destination" in actions[key].lower()), None)
+                assert choice is not None, f"the decision offered no destination field: {actions}"
+                chosen.append(choice)
+                content = json.dumps({"action": choice, "confidence": 0.9})
+            else:
+                content = json.dumps({"text": "Lisbon"})
+            reply = json.dumps({"choices": [{"message": {"role": "assistant", "content": content}}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(reply)))
+            self.end_headers()
+            self.wfile.write(reply)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, name="stub-chat-model", daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}/v1", chosen
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def main():
     passed = []
     with tempfile.TemporaryDirectory() as profile:
@@ -99,6 +156,19 @@ def main():
             assert page["url"].endswith("fixture.html"), page["url"]
             assert "CLICK" in page["operations"] and "TYPE_TEXT" in page["operations"]
             passed.append(f"a launched browser observed {len(page['elements'])} elements")
+
+            # A chat decider: no TypeSafe key at all, the text model answers over the engine's own
+            # endpoint, and the outcome is read from the page rather than from the reported decision.
+            with stub_chat_model() as (chat_url, chosen):
+                decision = sidecar.send("act", intent="Type the destination Lisbon", fingerprint=page["fingerprint"],
+                                        engine_env={"JEV_DECIDER": "chat", "TEXT_MODEL_BASE_URL": chat_url,
+                                                    "TEXT_MODEL": "stub-1", "TEXT_MODEL_API_KEY": "stub-key"})
+                page = sidecar.send("observe")["page"]
+                field = element(page, operation="TYPE_TEXT", contains="destination")
+                assert chosen and "Lisbon" in json.dumps(field), field
+                assert decision["decision"]["model"] == "chat:stub-1", decision["decision"]
+                assert decision["executed"]["operation"] == "TYPE_TEXT", decision["executed"]
+            passed.append(f"a chat decider chose {chosen[0]!r} with no Jev key, and the page holds the value")
 
             field = element(page, operation="TYPE_TEXT", contains="destination")
             sidecar.send("act", operation="TYPE_TEXT", target=target(page, "TYPE_TEXT", field["index"]),
@@ -145,7 +215,7 @@ def main():
             if sidecar.process.poll() is None:
                 sidecar.process.kill()
     print("\n".join(passed))
-    print(f"PASS: {len(passed)} sidecar checks; no model calls")
+    print(f"PASS: {len(passed)} sidecar checks; no model calls (the chat decider's model is a local stub)")
 
 
 if __name__ == "__main__":

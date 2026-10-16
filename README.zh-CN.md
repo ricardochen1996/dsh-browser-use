@@ -12,7 +12,7 @@
 
 ## ⚡ 亮点：快
 
-亮点是**更快的浏览器决策**。Jev（TypeSafe System One）从当前动作表中选出操作与目标，只有 `TYPE_TEXT` 需要生成输入值时才调用文本模型。`browser_goal` 在引擎内完成整段决策循环；`browser_act({ observation, intent })` 则只把当前一步的决策交给 Jev，完成后仍返回调用它的 agent。打开 Jev 开关只是开放这些路径，不会自动替代所有大模型轮次。
+亮点是**更快的浏览器决策**。Jev 从当前动作表中选出操作与目标，只有 `TYPE_TEXT` 需要生成输入值时才调用文本模型。`browser_goal` 在引擎内完成整段决策循环；`browser_act({ observation, intent })` 则只把当前一步的决策交给 Jev（`jev.decider: chat` 时交给文本模型），完成后仍返回调用它的 agent。Jev 一直可用，但不会自动替代所有大模型轮次。
 
 <img src="docs/speed.zh-CN.svg" alt="同一个任务：开启 jev 约 10.7s，关闭 jev 约 24.6–26.7s" width="100%" />
 
@@ -26,7 +26,7 @@
 
 **在这次决策循环基准中，Jev 比 max 思考组少用约 60% 的时间**（26.7 s / 10.7 s ≈ 2.5），每步决策的中位延迟为 1.1 s，对照组为 2.8–3.6 s。
 
-<img src="docs/how-it-works.svg" alt="关闭 jev：每步都是大模型一整轮；开启 jev：每步只是一次 TypeSafe 选择" width="100%" />
+<img src="docs/how-it-works.svg" alt="关闭 jev：每步都是大模型一整轮；开启 jev：每步只是一次策略选择" width="100%" />
 
 > 测量日期为 2026-09-30：三组各完成 3 轮，全部通过独立校验；另记录了 1 次网络失败并重跑。计时从页面打开后的第一次决策到 DONE/finish。脚本直接循环调用 sidecar 的 intent 路径，对照组用精简提示词通过 Responses API 逐轮调用工具，模型是测量时 DSH 配置的 `deepseek-v4.1-flash`。这**不是 DSH 内切换开关的端到端对比**：不计浏览器启动、初始导航、结束后的独立校验、DSH 委派与外层会话往返。一个本地任务的三轮数据不代表普遍加速倍率。Jev 文本助手使用同名模型但关闭思考；session 模式共享路由配置，不代表协议和思考设置完全相同。脚本与原始数据见 [`bench/`](bench/)；测速会消耗模型额度，凭据只从环境变量读取。
 
@@ -68,10 +68,10 @@ dsh-browser-use/
 | --- | --- |
 | `browser_open` | 在**本 Session 独占的浏览器**里打开页面，返回动作空间表 |
 | `browser_page` | 重新观测，给出新的观测编号 |
-| `browser_act` | 对某个观测里的某个目标执行一次操作：`CLICK` / `TYPE_TEXT` / `SELECT` / `SCROLL_UP` / `SCROLL_DOWN` / `WAIT`。开启 jev 后可改传 `intent`：不给 `operation` 时由 TypeSafe 在这个观测上选出操作与目标；`TYPE_TEXT` 不给 `text` 时由 jev 文本模型写入值 |
+| `browser_act` | 对某个观测里的某个目标执行一次操作：`CLICK` / `TYPE_TEXT` / `SELECT` / `SCROLL_UP` / `SCROLL_DOWN` / `WAIT`。开启 jev 后可改传 `intent`：不给 `operation` 时由策略在这个观测上选出操作与目标；`TYPE_TEXT` 不给 `text` 时由文本模型写入值 |
 | `browser_screenshot` | 截取可视区域（图片附件） |
 | `browser_console` | 读取控制台消息、页面异常、失败请求与 4xx/5xx |
-| `browser_goal` | 把整个目标交给 TypeSafe 策略一次跑完（**默认关闭**，会消耗付费额度） |
+| `browser_goal` | 把整个目标交给浏览器策略一次跑完：每一步的操作与目标都由它自己选（会消耗付费额度；`jev.decider` 决定是 Jev 还是文本模型回答） |
 | `browser_close` | 关掉标签页、浏览器与 daemon |
 
 **持续派活，不用开一堆 `browser_task`。** 插件用 DSH 原生的 continuable subagent（`ctx.subagents.startContinuable` / `sendMessage`），每个对话只有一个浏览器子 agent：
@@ -314,20 +314,21 @@ Status   : ready
 - **侧边栏「插件」→ 打开 `@ricardochen1996/dsh-browser-use`**：开关直接画在「包含的组件」上面（插件页自身的配置区）。
 - 同一页里 **`dsh-browser-use` 那一行的标题本身就是「配置」按钮**（带 `>` 箭头，无障碍名 `配置 @ricardochen1996/dsh-browser-use`），点开是同一套表单。
 
-表单里**只有 jev 这一组**，用 shell 自己的组件画成和其它插件一样的行式布局：
+表单刻意只有一个问题（外加它可能需要的那组端点），用 shell 自己的组件画成和其它插件一样的行式布局：
 
 | 表单里的字段 | 说明 |
 | --- | --- |
-| `jev.enabled` | 开放 `browser_goal` 与 `browser_act` 的 `intent`（花 TypeSafe 与文本模型额度） |
-| `jev.source` | `session` 继承主会话；`custom` 才用下面自己填的 URL/key |
-| `jev.typesafe.baseURL` / `.model` / `.apiKeyEnv` / `.apiKey` | TypeSafe 端点、模型名、key（凭据名或明文） |
-| `jev.textModel.baseURL` / `.model` / `.apiKeyEnv` / `.apiKey` | 文本模型端点、模型名、key |
+| `jev.decider` | 由谁回答环路：**Jev**（默认，调下面的端点）或**文本模型**（完全不需要 Jev key） |
+| `jev.typesafe.baseURL` / `.model` | Jev 端点与模型名；由文本模型决策时不生效 |
+| `jev.typesafe.apiKeyEnv` / `.apiKey` | Jev 的 key 从哪来（DSH 凭据名或明文）；**两项都留空就直接花主会话路由的 key** |
 
-这些字段是 `.volatile()` 的：改完当场生效（下次 `browser_goal` 或带 `intent` 的 `browser_act` 就用新值），`apiKey` 以 `role('secret')` 提交、不出现在任何表单响应里，表单里留空就表示不动已存的 key。
+**没有"关掉 Jev"这个开关**：`browser_goal` 与 `browser_act` 的 `intent` 就是这个插件提供的能力，人真正要选的只是"由哪个模型回答"。想让它们整个消失，仍可在 profile patch 里写 `jev.enabled: false`。
 
-**其余开关都在 profile patch 里改**（改完 DSH 会重挂插件，和以前一样）：`mode`、`cdpEndpoint`、`executablePath`、`userDataDir`、`headless`、`allowScreenshots`、`requestTimeoutMs`、`delegate`、`delegateMode`、`subagentProvider`、`maxDepth`、`projectPath`、`pythonPath`、`reserveBrowserUseSlot`、`jev.typesafe.fallbackURL`、`jev.textModel.reasoning`、`jev.textModel.headers`。它们决定**有哪些工具**、跑哪个解释器、占不占组合槽位——做成表单字段等于承诺一个做不到的"立即生效"。
+**文本模型同样不做表单字段**：它就是主会话自己的路由（端点、模型、key、headers），并**关闭推理**——为了往输入框里填一个值，再问你第二个模型该发到哪儿，只会多一个填错的机会。profile patch 里仍可覆盖 `jev.textModel.*`（模型、推理开关、追加 headers）与 `jev.source`，只是表单不问。
 
-一个已知边界：`jev.enabled` 改的是工具集合，对话自己的工具面会立刻重建；但一个已经存在的常驻浏览器子 agent 保留它被组合时那套工具，直到它被 `fresh: true` 换掉或插件被重挂（`browser_doctor` 的 Jev 行始终反映当前配置）。
+`jev.decider` 是 `.volatile()` 的：改完当场生效（下次 `browser_goal` 或带 `intent` 的 `browser_act` 就用新值），`apiKey` 以 `role('secret')` 提交、不出现在任何表单响应里，表单里留空就表示不动已存的 key。
+
+**其余开关都在 profile patch 里改**（改完 DSH 会重挂插件，和以前一样）：`mode`、`cdpEndpoint`、`executablePath`、`userDataDir`、`headless`、`allowScreenshots`、`requestTimeoutMs`、`delegate`、`delegateMode`、`subagentProvider`、`maxDepth`、`projectPath`、`pythonPath`、`reserveBrowserUseSlot`、`jev.enabled`、`jev.typesafe.fallbackURL`、`jev.source`、`jev.textModel.baseURL`、`jev.textModel.model`、`jev.textModel.reasoning`、`jev.textModel.headers`、`jev.textModel.apiKey` / `.apiKeyEnv`。它们决定**有哪些工具**、跑哪个解释器、占不占组合槽位，或者描述一个本不该让人操心的文本模型——做成表单字段等于承诺一个做不到的"立即生效"。
 
 改完一次之后，下面的 YAML 写法仍然有效（也是 `projectPath` 这类字段唯一的入口）：
 
@@ -338,19 +339,26 @@ Status   : ready
   config:
     # projectPath: /absolute/path/to/jev-ultrafast   # 只在想用引擎 checkout 代替随包引擎时设置
     jev:
-      enabled: true              # 开放 browser_goal 与 browser_act 的 intent；false 时不解析、也不传任何 key
-      source: session            # session：继承主会话；custom：自己配
+      decider: typesafe          # typesafe：Jev 回答；chat：文本模型回答，完全不需要 Jev key
       typesafe:
         baseURL: https://opencode.ai/zen/v1/systemone
         model: jev-1.13
-      textModel:
-        reasoning: thinking-disabled
-        headers: { x-opencode-session: dsh-harness }
+        # apiKeyEnv: OPENCODE_GATEWAY_API_KEY   # 不写就直接花主会话路由的 key
+      # enabled: false           # 收回 browser_goal 与 browser_act 的 intent；默认就是开放
 ```
 
-**`source: session`（从主会话继承）**：每次调用 `browser_goal` 或带 `intent` 的 `browser_act` 时读取**当前对话正在用的模型路由**（切了模型也跟着变）——文本模型用该路由的 `baseURL`、`headers`、模型名和 key（该 provider 配置里 `apiKeyEnv` 指向的 DSH 凭据）；TypeSafe 用同一个 key，端点取 `jev.typesafe.baseURL`（TypeSafe 端点无法从聊天路由推出来）。可覆盖的只有 `typesafe.baseURL/model/fallbackURL`、`textModel.model`（留空 = 主会话的模型）、`textModel.reasoning` 和追加的 `textModel.headers`。以下情况会拒绝并给出修复提示：路由是 Anthropic 协议、没有 `baseURL`、用登录态而非 API key（如 DeepSeek 账号登录）、对话还没选模型。
+这就是一个人需要的全部配置：**文本模型就是对话自己的路由**（provider 的 headers 一起用），默认关推理，主会话切模型它也跟着切。profile patch 里还能加两个可选覆盖——`source: custom`（下面那块）与 `jev.textModel.*`：
 
-**`source: custom`（单独配置）**：
+```yaml
+      textModel:
+        model: deepseek-flash                    # 留空 = 主会话的模型
+        reasoning: thinking-disabled             # 默认值；"none" 则改发 reasoning: {enabled: false}
+        headers: { x-opencode-session: dsh-harness }   # 追加在路由自己的 headers 之后
+```
+
+**`source: session`（默认：从主会话继承）**：每次调用 `browser_goal` 或带 `intent` 的 `browser_act` 时读取**当前对话正在用的模型路由**（切了模型也跟着变）——文本模型用该路由的 `baseURL`、`headers`、模型名和 key（该 provider 配置里 `apiKeyEnv` 指向的 DSH 凭据）；Jev 花的也是这个 key，除非 `jev.typesafe.apiKeyEnv` / `.apiKey` 另指了一个，端点取 `jev.typesafe.baseURL`（Jev 端点无法从聊天路由推出来）。以下情况会拒绝并给出修复提示：路由是 Anthropic 协议、没有 `baseURL`、用登录态而非 API key（如 DeepSeek 账号登录）、对话还没选模型。
+
+**`source: custom`（只在 profile patch 里：给文本模型单独配一套）**：
 
 ```yaml
     jev:
@@ -368,7 +376,17 @@ Status   : ready
         apiKeyEnv: OPENCODE_GATEWAY_API_KEY   # 或 apiKey: 明文（不推荐）
 ```
 
-两种模式下，`browser_goal` 与 `browser_act` 的 `intent` 所用的端点和 key **只来自插件配置/主会话**：sidecar 不读引擎 checkout 的 `.env`，DSH 进程环境里的 `TYPESAFE_*` / `TEXT_MODEL_*` 会在启动 sidecar 前被清掉；key 按次随请求传给 sidecar，只在那次运行期间可见。`browser_doctor` 显示 jev 状态和 key 来源（不显示 key 本身）。旧的 `allowGoalMode: true` 仍等价于 `jev.enabled: true`。
+**`decider: chat`（完全不配 Jev key 也能跑）**：sidecar 在那一次调用期间于本地起一个引擎自带的 chat 决策端点，并把引擎的 Jev 变量指向它，于是**由文本模型来选操作和目标**——默认也就是主会话自己的路由，所以你手上已有的聊天 key 就够了，`browser_goal` 与带 `intent` 的 `browser_act` 都能用。这时 `jev.typesafe` 整组都不读：里面留了值就是没用上，`browser_doctor` 的 Jev 行会说明。它是"没有 Jev key 时的走法"，不是快路径——引擎自己的测速里这一档是 10–14 s、3 次中 2 次成功，托管模型约 5 s、2 次 2 次成功。
+
+```yaml
+    jev:
+      enabled: true
+      decider: chat              # 由文本模型回答；jev.typesafe 不再使用
+      textModel:
+        model: deepseek-flash    # 留空 = 主会话的模型（source: session 时）
+```
+
+每种模式下，`browser_goal` 与 `browser_act` 的 `intent` 所用的端点和 key **只来自插件配置/主会话**：sidecar 不读引擎 checkout 的 `.env`，DSH 进程环境里的 `TYPESAFE_*` / `TEXT_MODEL_*` 会在启动 sidecar 前被清掉；key 按次随请求传给 sidecar，只在那次运行期间可见。`browser_doctor` 显示 jev 状态、决策者是谁和 key 来源（不显示 key 本身）。旧的 `allowGoalMode: true` 仍等价于 `jev.enabled: true`。
 
 | 字段 | 默认 | 含义 |
 | --- | --- | --- |
@@ -380,10 +398,11 @@ Status   : ready
 | `userDataDir` | 每 Session 一个（`~/.jev-ultrafast/browser/<session>`） | 专用 profile 目录 |
 | `headless` | `false` | 无窗口启动 |
 | `reserveBrowserUseSlot` | `true` | 占用 `ctx.browserUse` 单例槽（该服务被挂载时） |
-| `jev.enabled` ✎ | `false` | 开放 `browser_goal` 与 `browser_act` 的 `intent`（花 TypeSafe 与文本模型额度）；旧名 `allowGoalMode` |
-| `jev.source` ✎ | `session` | `session` 继承主会话的路由和 key；`custom` 用下面自己配的 `baseURL` / key |
-| `jev.typesafe` | 引擎默认 | TypeSafe 端点：`baseURL`、`model`、`fallbackURL`；`custom` 时再加 `apiKeyEnv` / `apiKey`。表单里有前两项与两个 key 字段，`fallbackURL` 只在 YAML 里 |
-| `jev.textModel` | 主会话 / 引擎默认 | 文本模型（OpenAI 兼容）：`model`、`reasoning`（`none` / `thinking-disabled`）、`headers`；`custom` 时再加 `baseURL`、`apiKeyEnv` / `apiKey`。表单里有 `baseURL` / `model` 与两个 key 字段，`reasoning` / `headers` 只在 YAML 里 |
+| `jev.enabled` ✎ | `false` | 开放 `browser_goal` 与 `browser_act` 的 `intent`（花模型额度）；旧名 `allowGoalMode` |
+| `jev.decider` ✎ | `typesafe` | 谁回答环路里的问题：`typesafe` 调下面那个端点；`chat` 在本地起引擎的 chat 决策端点、由文本模型回答，不需要 Jev key |
+| `jev.typesafe` | 引擎默认 | Jev 端点：`baseURL`、`model` ✎、key（`apiKey` / `apiKeyEnv` ✎，留空 = 花主会话路由的 key）以及 `fallbackURL`（只在 YAML）。`decider: chat` 时不使用 |
+| `jev.source` | `session` | **文本模型**从哪来：`session`（对话自己的路由）或 `custom`（用下面的 `jev.textModel` 端点与 key）。不做表单字段：表单的简单用法就是默认值 |
+| `jev.textModel` | 对话自己的路由 | 文本模型的覆盖项：`model`、`reasoning`（默认 `thinking-disabled`）、`headers`；`custom` 时另加 `baseURL`、`apiKeyEnv` / `apiKey`。同样不做表单字段 |
 | `allowScreenshots` | `true` | 开放 `browser_screenshot` |
 | `requestTimeoutMs` | `180000` | 单次 sidecar 请求上限 |
 | `delegate` | `true` | 浏览器操作交给子 agent；`false` 时挂给本对话（直接模式） |
@@ -391,7 +410,7 @@ Status   : ready
 | `subagentProvider` | `spawn` | `ctx.subagents` 里的 provider 名；需要它能组合**进程内**子 agent，否则退回直接模式 |
 | `maxDepth` | `0` | 子 agent 的委派深度上限；`0` 表示用 provider 自己的递归预算 |
 
-✎ = 出现在**侧边栏「插件」→ `@ricardochen1996/dsh-browser-use`**（包页面或行标题里的「配置」）的表单里，改完立即生效（在下次用到该值时）；没有 ✎ 的字段只在 profile patch 里配。
+✎ = 出现在**侧边栏「插件」→ `@ricardochen1996/dsh-browser-use`**（包页面或行标题里的「配置」）的表单里，改完立即生效（在下次用到该值时）；没有 ✎ 的字段只在 profile patch 里配。表单是双语的：标签、说明和拒绝提示都来自 shell 自己的 locale 服务，所以界面是中文就读**中文**，界面是英文就读 **English**。
 
 ## 六、验证（不花一分钱）
 
@@ -467,7 +486,7 @@ DSH host (Node)                                        ← 本仓库 lib/
   sidecar/bridge.py                                    ← 本仓库 sidecar/
       ├─ Browser.observe / Browser.act / 截图 / settle       （引擎的既有执行器）
       ├─ model.choose / field_text（browser_act 带 intent 时，单步）
-      └─ Agent + TypeSafe 策略（browser_goal，整段目标）
+      └─ Agent + Jev 策略（browser_goal，整段目标）
                          │  CDP
                          ▼
                    专用 Chrome 实例（每 Session 一份 profile）
@@ -483,7 +502,7 @@ DSH host (Node)                                        ← 本仓库 lib/
 - 改了插件代码要**重启 DSH** 才生效。
 - 不提供 `browser_eval` / 坐标输入——模型输出变成代码会破坏本项目的第一原则。
 - 页面状态不随 Session 恢复：resume/fork 会开新浏览器（DSH provider 约定如此）。
-- `browser_goal` 与带 `intent` 的 `browser_act` 花的是 TypeSafe 与文本模型额度，DSH 的用量统计看不到这部分。
+- `browser_goal` 与带 `intent` 的 `browser_act` 花的是模型额度（Jev，或由文本模型决策时就是它），DSH 的用量统计看不到这部分。
 - **委派需要组合里有 subagent provider**（如 `@deepseek-ai/dsh-subagent-spawn-in-process`，且它能组合进程内子 agent）。没有就退回直接模式：日志 WARN、`browser_doctor` 的 `Delegation:` 行写明原因。标准 DSH base bundle 默认已挂 `spawn`；如果 provider 在插件**加载之后**才出现，要重启 DSH 才会进入委派模式。
 - 子 agent 被限制成只有浏览器工具加 `send_message`（其它全局工具被 allow 列表挡住）：它能点页面、能给主 agent 发消息，不能碰你的文件与 shell。
 - 常驻子 agent 的上下文会随任务累积；太长或跑偏时用 `browser_task({ fresh: true, … })` 换一个新的（旧的会被 interrupt，浏览器保留）。一次性模式下子 agent 任务结束即释放。

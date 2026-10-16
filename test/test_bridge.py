@@ -428,6 +428,7 @@ def test_goal_mode_needs_a_key_from_the_plugin_config_and_never_reads_the_engine
     monkeypatch.setenv("TYPESAFE_API_KEY", "ambient-must-not-count")
     error = failure(session, "goal", url="https://example.test/", goal="Find it")
     assert error["kind"] == "no_credentials" and "jev" in error["message"]
+    assert "jev.decider: chat" in error["message"], "the refusal names the mode that needs no TypeSafe key"
     assert "request_environment" not in vars(bridge)
 
 
@@ -455,6 +456,35 @@ def test_goal_mode_sees_exactly_the_variables_of_its_request_and_none_after(sess
          engine_env={"TYPESAFE_API_KEY": "k1", "TEXT_MODEL_API_KEY": "k2", "TEXT_MODEL_BASE_URL": "https://gw.test/v1"})
     assert seen["TYPESAFE_API_KEY"] == "k1" and seen["TEXT_MODEL_API_KEY"] == "k2"
     assert seen["TEXT_MODEL_BASE_URL"] == "https://gw.test/v1" and seen["TEXT_MODEL"] is None
+    assert not any(name in bridge.os.environ for name in bridge.ENGINE_VARIABLES)
+
+
+def test_goal_mode_with_a_chat_decider_aims_the_loop_at_its_endpoint_without_a_key(session, monkeypatch):
+    """`jev.decider: chat`: the text model answers, so no TypeSafe key is required or looked for."""
+    from jev_ultrafast import agent as agent_module
+
+    seen = {}
+
+    class FakeAgent:
+        def __init__(self, url, goal, **options):
+            seen.update({name: bridge.os.environ.get(name) for name in bridge.ENGINE_VARIABLES})
+
+        def run(self):
+            yield {"status": "done", "elapsed_ms": 1, "history": [], "text_calls": []}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *arguments):
+            return False
+
+    monkeypatch.setattr(agent_module, "Agent", FakeAgent)
+    result = call(session, "goal", url="https://example.test/", goal="Find it",
+                  engine_env={"JEV_DECIDER": "chat", "TEXT_MODEL_API_KEY": "k2",
+                              "TEXT_MODEL_BASE_URL": "https://chat.test/v1", "TEXT_MODEL": "chat-1"})
+    assert result["status"] == "done"
+    assert seen["JEV_DECIDER"] == "chat" and seen["TYPESAFE_API_KEY"] is None
+    assert seen["TYPESAFE_BASE_URL"].startswith("http://127.0.0.1:") and seen["TYPESAFE_MODEL"] == "chat-1"
     assert not any(name in bridge.os.environ for name in bridge.ENGINE_VARIABLES)
 
 
@@ -490,6 +520,34 @@ def test_a_jev_verdict_of_done_executes_nothing(session, monkeypatch):
                   engine_env={"TYPESAFE_API_KEY": "k1"})
     assert result["decision"]["operation"] == "DONE" and "executed" not in result
     assert session.browser.calls == []
+
+
+def test_a_chat_decider_answers_an_intent_over_loopback_with_no_typesafe_key(session, monkeypatch):
+    """With `jev.decider: chat` the sidecar serves a real System One endpoint for the one call.
+
+    The whole path is exercised: the loop posts its factored questions to the loopback URL the sidecar
+    just pointed it at, the endpoint asks the chat model (stubbed here, so no network and no key), and
+    the answer comes back as a decision the browser then executes.
+    """
+    from jev_ultrafast import llm_endpoint
+
+    asked = {}
+
+    def ask(self, messages):
+        asked.update(model=self.model, payload=json.loads(messages[-1]["content"]))
+        return json.dumps({"action": "CLICK 2", "confidence": 0.9})
+
+    monkeypatch.setattr(llm_endpoint.Chooser, "ask", ask)
+    result = call(session, "act", intent="Press Go", fingerprint=session.page["fingerprint"],
+                  engine_env={"JEV_DECIDER": "chat", "TEXT_MODEL_API_KEY": "k2",
+                              "TEXT_MODEL_BASE_URL": "https://chat.test/v1", "TEXT_MODEL": "chat-1"})
+    assert asked["model"] == "chat-1" and asked["payload"]["goal"] == "Press Go"
+    assert "CLICK 2" in asked["payload"]["actions"], "the chat model reads the actions the loop offers"
+    assert session.browser.calls == [("e3", None)]
+    assert result["decision"]["operation"] == "CLICK" and result["decision"]["label"] == "Go"
+    assert result["decision"]["model"] == "chat:chat-1"
+    # The endpoint lives for exactly this call, and nothing it needed outlives it.
+    assert not any(name in bridge.os.environ for name in bridge.ENGINE_VARIABLES)
 
 
 def test_type_text_without_text_takes_its_value_from_the_jev_text_model(session, monkeypatch):

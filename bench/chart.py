@@ -13,7 +13,7 @@ data = json.loads(source.read_text())
 summary, meta = data["summary"], data["meta"]
 TEXT = {
     "zh-CN": {
-        "jev": ("开启 jev", f"TypeSafe {meta['typesafe_model']} + {meta['text_model']}"),
+        "jev": ("开启 jev", f"Jev {meta['typesafe_model']} + {meta['text_model']}"),
         "llm:low": ("关闭 jev", f"{meta['llm_model']} · reasoning low"),
         "llm:max": ("关闭 jev", f"{meta['llm_model']} · reasoning max（DSH 当前配置）"),
         "title": "同一个任务，中位耗时",
@@ -26,7 +26,7 @@ TEXT = {
         ),
     },
     "en": {
-        "jev": ("Jev on", f"TypeSafe {meta['typesafe_model']} + {meta['text_model']}"),
+        "jev": ("Jev on", f"Jev {meta['typesafe_model']} + {meta['text_model']}"),
         "llm:low": ("Jev off", f"{meta['llm_model']} · reasoning low"),
         "llm:max": ("Jev off", f"{meta['llm_model']} · reasoning max (current DSH setting)"),
         "title": "Same task, median time to done",

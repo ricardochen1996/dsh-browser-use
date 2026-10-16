@@ -12,11 +12,12 @@ The plugin's Node half speaks to this module over stdin/stdout; it is the Python
     open         start a page in a browser this sidecar owns; answer with one observation
     observe      read the current page again
     act          one operation on one target of the named observation; refuses a page that moved.
-                 With an ``intent`` and no operation, Jev (TypeSafe) chooses the operation and
-                 target; a TYPE_TEXT without text gets its value from the Jev text model
+                 With an ``intent`` and no operation, the policy chooses the operation and target —
+                 TypeSafe, or the text model itself with ``jev.decider: chat``; a TYPE_TEXT without
+                 text gets its value from the text model either way
     screenshot   one JPEG of the visible viewport
     diagnostics  console entries, exceptions, failed and 4xx/5xx requests, drained per call
-    goal         one TypeSafe run in its own tab; spends model quota
+    goal         one policy run in its own tab; spends model quota
     close        release the owned tab
     shutdown     stop the tab, the browser, and the daemon
 
@@ -46,7 +47,7 @@ import sys
 import time
 import urllib.request
 from collections import deque
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext, redirect_stdout
 from pathlib import Path
 
 # Browser Harness fixes its daemon name when its modules are imported, and one daemon owns one CDP
@@ -409,22 +410,63 @@ def console_events(events, session):
 
 
 ENGINE_VARIABLES = (
+    "JEV_DECIDER",
     "TYPESAFE_API_KEY", "TYPESAFE_BASE_URL", "TYPESAFE_MODEL", "TYPESAFE_FALLBACK_URL",
     "TEXT_MODEL_API_KEY", "TEXT_MODEL_BASE_URL", "TEXT_MODEL", "TEXT_MODEL_REASONING", "TEXT_MODEL_HEADERS",
 )
 
 
+def decisions(values):
+    """Who answers the loop's questions: ``chat`` the text model, anything else the TypeSafe endpoint."""
+    return "chat" if str(values.get("JEV_DECIDER") or "").strip() == "chat" else "typesafe"
+
+
+def chat_decisions_endpoint():
+    """Serve the engine's chat-model endpoint on loopback for one call, and aim the loop at it.
+
+    ``jev.decider: chat`` has the text model choose the operation and the target. The engine's
+    ``llm_endpoint`` answers the very System One request the loop would otherwise post to TypeSafe, so
+    the loop cannot tell the two apart and nothing else in this sidecar changes. Imported here, not at
+    module load: an engine older than the endpoint should fail one call, never the whole sidecar.
+    """
+    from jev_ultrafast.llm_endpoint import Endpoint, chooser_from_env, serve_in_thread
+
+    # chooser_from_env reads the text model's variables, which engine_environment has just set.
+    chooser, page_chars = chooser_from_env()
+    server, url = serve_in_thread(Endpoint(chooser, page_chars))
+    os.environ["TYPESAFE_BASE_URL"] = url
+    os.environ["TYPESAFE_MODEL"] = chooser.model
+    return server
+
+
 @contextmanager
-def engine_environment(values):
-    """The engine's model variables for one model call, exactly as the plugin sent them, then none."""
+def engine_environment(values, endpoint=False):
+    """The engine's model variables for one model call, exactly as the plugin sent them, then none.
+
+    ``endpoint`` also starts the chat-model decision endpoint, which only a call that needs a *decision*
+    does — an intent, or a goal run. A TYPE_TEXT value needs the text model and nothing to decide from.
+    """
     for name in ENGINE_VARIABLES:
         os.environ.pop(name, None)
     os.environ.update({name: str(values[name]) for name in ENGINE_VARIABLES if values.get(name)})
-    try:
-        yield
-    finally:
-        for name in ENGINE_VARIABLES:
-            os.environ.pop(name, None)
+    # That endpoint logs every request to stdout ("[llm-endpoint] ...", and the same on a refused
+    # request), and this process's stdout carries the line-delimited JSON the host reads. While one is
+    # served, prints belong on stderr instead — which the host keeps as diagnostics. Protocol answers
+    # are unaffected: `serve` writes to the stream it captured at startup, not to `sys.stdout`.
+    chat = endpoint and decisions(values) == "chat"
+    printed = redirect_stdout(sys.stderr) if chat else nullcontext()
+    server = None
+    with printed:
+        try:
+            if chat:
+                server = chat_decisions_endpoint()
+            yield
+        finally:
+            if server is not None:
+                server.shutdown()
+                server.server_close()
+            for name in ENGINE_VARIABLES:
+                os.environ.pop(name, None)
 
 
 class Session:
@@ -554,12 +596,13 @@ class Session:
         return result
 
     def _decide(self, intent, engine_env):
-        """One TypeSafe choice of operation and target on the current observation. Spends model quota."""
-        if not str(engine_env.get("TYPESAFE_API_KEY") or "").strip():
+        """One choice of operation and target on the current observation. Spends model quota."""
+        if decisions(engine_env) != "chat" and not str(engine_env.get("TYPESAFE_API_KEY") or "").strip():
             raise BridgeError("no_credentials",
-                              "an intent needs a TypeSafe key: configure jev in the dsh-browser-use plugin config")
+                              "an intent needs a TypeSafe key: configure jev in the dsh-browser-use plugin "
+                              "config, or set jev.decider: chat so the text model decides")
         try:
-            with engine_environment(engine_env):
+            with engine_environment(engine_env, endpoint=True):
                 choice = choose(self.page, intent, self.history)
         except (RuntimeError, ValueError, OSError, KeyError, TypeError) as error:
             raise BridgeError("model_error", f"Jev could not choose an action: {error}") from None
@@ -600,7 +643,7 @@ class Session:
         return report
 
     def goal(self, params):
-        """Run the TypeSafe policy once, in its own tab. Spends model quota; never a retry."""
+        """Run the policy once, in its own tab. Spends model quota; never a retry."""
         from jev_ultrafast.agent import Agent
         from jev_ultrafast.model import NoTextValue
 
@@ -610,13 +653,14 @@ class Session:
         # Endpoints and keys come from the plugin configuration with this one request; the engine
         # checkout's .env is deliberately not read, and nothing outlives the run.
         engine_env = params.get("engine_env") or {}
-        if not str(engine_env.get("TYPESAFE_API_KEY") or "").strip():
+        if decisions(engine_env) != "chat" and not str(engine_env.get("TYPESAFE_API_KEY") or "").strip():
             raise BridgeError("no_credentials",
-                              "browser_goal has no TypeSafe key: configure jev in the dsh-browser-use plugin config")
+                              "browser_goal has no TypeSafe key: configure jev in the dsh-browser-use plugin "
+                              "config, or set jev.decider: chat so the text model decides")
         self._connect(params)
         last = None
         try:
-            with engine_environment(engine_env), Agent(url, goal, screenshots=False) as agent:
+            with engine_environment(engine_env, endpoint=True), Agent(url, goal, screenshots=False) as agent:
                 for state in agent.run():
                     last = state
         except NoTextValue as error:

@@ -198,7 +198,7 @@ dependencies = [
     { name = "httpx", extra = ["http2"] },
 ]
 wheels = [
-    { filename = "jev_ultrafast-0.1.0-py3-none-any.whl", hash = "sha256:1cf38095bdeb8ac0398b3dbe48ed36c140bd7de0a9c56889ceac7a5df561befd" },
+    { filename = "jev_ultrafast-0.1.0-py3-none-any.whl", hash = "sha256:bbb34e9f5b8f91ade48e3b67dfbef734cf169f6ae088467578bd29157238a363" },
 ]
 
 [package.metadata]

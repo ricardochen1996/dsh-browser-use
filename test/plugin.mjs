@@ -226,12 +226,19 @@ async function engineConfiguration() {
   ok(/only applies to jev\.source: custom/u.test(refused({ jev: { source: 'session', textModel: { baseURL: 'https://x.test/v1' } } }) ?? ''),
     'an endpoint or key written for session mode is refused instead of silently ignored')
   ok(/jev\.source/u.test(refused({ jev: { source: 'main' } }) ?? ''), 'an unknown source is refused')
-  ok(jev.resolveJevConfig({ allowGoalMode: true }).enabled === true, 'the older allowGoalMode still turns jev on')
+  ok(/jev\.decider/u.test(refused({ jev: { decider: 'main' } }) ?? ''), 'an unknown decider is refused')
+  ok(/jev\.enabled/u.test(refused({ jev: { enabled: 'yes' } }) ?? ''), 'enabled is still a boolean a patch may withdraw')
+  ok(refused({ jev: { decider: 'chat', typesafe: { model: 'jev-1' } } }) === undefined,
+    'a TypeSafe setting the chat decider does not read is left standing rather than refused')
+  ok(jev.resolveJevConfig({}).enabled === true && jev.resolveJevConfig({}).decider === 'typesafe',
+    'Jev is on, with TypeSafe deciding, for a configuration that says nothing at all')
+  ok(jev.resolveJevConfig({ allowGoalMode: true }).enabled === true, 'the older allowGoalMode still means enabled')
 
-  const credentials = { resolve: async name => (name === 'GATEWAY_KEY' ? { value: 'stored-key', source: 'file' } : undefined) }
+  const credentials = { resolve: async name => ({ GATEWAY_KEY: 'stored-key', TYPESAFE_KEY: 'safe-key' }[name] === undefined
+    ? undefined
+    : { value: { GATEWAY_KEY: 'stored-key', TYPESAFE_KEY: 'safe-key' }[name], source: 'file' }) }
   const custom = {
     jev: jev.resolveJevConfig({ jev: {
-      enabled: true,
       source: 'custom',
       typesafe: { baseURL: 'https://gateway.test/systemone', model: 'jev-1', apiKeyEnv: 'GATEWAY_KEY' },
       textModel: { baseURL: 'https://gateway.test/v1', model: 'text-1', apiKey: 'literal-text-key', reasoning: 'thinking-disabled', headers: { 'x-session': 'dsh' } },
@@ -257,7 +264,7 @@ async function engineConfiguration() {
     })[name],
   })
   const owner = { session: { requestHeader: () => ({ config: route }) } }
-  const session = { jev: jev.resolveJevConfig({ jev: { enabled: true, source: 'session', typesafe: { baseURL: 'https://gateway.test/systemone', model: 'jev-1' } } }) }
+  const session = { jev: jev.resolveJevConfig({ jev: { source: 'session', typesafe: { baseURL: 'https://gateway.test/systemone', model: 'jev-1' } } }) }
   const inherited = await jev.jevEnvironment(session, composition(profile), owner)
   ok(inherited.env.TYPESAFE_API_KEY === 'stored-key' && inherited.env.TEXT_MODEL_API_KEY === 'stored-key'
     && inherited.env.TEXT_MODEL_BASE_URL === profile.baseURL && inherited.env.TEXT_MODEL === 'deepseek-flash'
@@ -266,17 +273,55 @@ async function engineConfiguration() {
   route.model = 'glm-5.3'
   ok((await jev.jevEnvironment(session, composition(profile), owner)).env.TEXT_MODEL === 'glm-5.3',
     'session: a model switch in the main conversation reaches the next call')
-  const overridden = { jev: jev.resolveJevConfig({ jev: { enabled: true, textModel: { model: 'fast-one', headers: { 'x-extra': '1' } } } }) }
+  const overridden = { jev: jev.resolveJevConfig({ jev: { textModel: { model: 'fast-one', headers: { 'x-extra': '1' } } } }) }
   const override = (await jev.jevEnvironment(overridden, composition(profile), owner)).env
   ok(override.TEXT_MODEL === 'fast-one' && override.TEXT_MODEL_HEADERS === '{"x-opencode-session":"dsh","x-extra":"1"}',
-    'session: textModel.model overrides the inherited model and textModel.headers add to the route’s')
+    'session: textModel.model overrides the inherited model and textModel.headers add to the route\u2019s')
+  ok((await jev.jevEnvironment(session, composition(profile), owner)).env.TEXT_MODEL_REASONING === 'thinking-disabled',
+    'session: reasoning is off by default, so the text model is not asked to think before it types')
+  // The one credential the form asks for is TypeSafe's, and leaving it empty is the simple default:
+  // the conversation's own key is spent there. Naming one spends it on TypeSafe and only there.
+  const ownKey = { jev: jev.resolveJevConfig({ jev: { typesafe: { apiKeyEnv: 'TYPESAFE_KEY' } } }) }
+  const typed = await jev.jevEnvironment(ownKey, composition(profile), owner)
+  ok(typed.env.TYPESAFE_API_KEY === 'safe-key' && typed.env.TEXT_MODEL_API_KEY === 'stored-key',
+    'session: a TypeSafe credential named in the config is spent on TypeSafe, while the text model keeps the route\u2019s')
+  ok(/key from DSH credential TYPESAFE_KEY/u.test(typed.describe[0]),
+    'the doctor names where the TypeSafe key came from')
   const status = await jev.jevStatus(session, composition({ ...profile, api: 'anthropic-messages' }), owner)
   ok(/NOT USABLE/u.test(status) && /Anthropic/u.test(status) && !status.includes('stored-key'),
     'the doctor explains why a route cannot be inherited, without printing any key')
   ok(/not chosen a model/u.test(await jev.jevStatus(session, composition(profile), { session: { requestHeader: () => undefined } })),
     'a conversation without a model yet says so')
-  ok(/jev\.enabled is false/u.test(await jev.jevStatus({ jev: jev.resolveJevConfig({}) }, undefined, owner)),
-    'with jev off nothing is resolved')
+  const withdrawn = jev.resolveJevConfig({ jev: { enabled: false } })
+  ok(withdrawn.enabled === false
+    && /jev\.enabled is false/u.test(await jev.jevStatus({ jev: withdrawn }, undefined, owner)),
+  'a patch may still withdraw the tools, and the doctor says that is why nothing is resolved')
+
+  // `decider: chat`: the text model answers the loop's questions, so nothing resolves a TypeSafe key.
+  const chat = { jev: jev.resolveJevConfig({ jev: {
+    source: 'custom', decider: 'chat',
+    textModel: { baseURL: 'https://gateway.test/v1', model: 'text-1', apiKey: 'literal-text-key' },
+  } }) }
+  const chatSet = await jev.jevEnvironment(chat, withCredentials, undefined)
+  ok(chatSet.env.JEV_DECIDER === 'chat' && chatSet.env.TEXT_MODEL === 'text-1'
+    && !('TYPESAFE_API_KEY' in chatSet.env) && !('TYPESAFE_BASE_URL' in chatSet.env) && !('TYPESAFE_MODEL' in chatSet.env),
+  'chat: a custom text model decides, and no TypeSafe endpoint or key is resolved')
+  ok(/decisions from text model text-1/u.test(chatSet.describe.join('; ')),
+    'chat: the doctor says the text model decides rather than naming a TypeSafe key')
+  const chatInherited = await jev.jevEnvironment({ jev: jev.resolveJevConfig({ jev: { decider: 'chat' } }) }, composition(profile), owner)
+  ok(chatInherited.env.JEV_DECIDER === 'chat' && chatInherited.env.TEXT_MODEL === 'glm-5.3'
+    && !('TYPESAFE_API_KEY' in chatInherited.env),
+  'chat: session mode still inherits the route for the text model, and sets no TypeSafe key')
+  // A TypeSafe endpoint left over from before the switch moved is not an error: it is simply not read,
+  // and the doctor says so instead of the configuration failing to load.
+  const both = { jev: jev.resolveJevConfig({ jev: {
+    source: 'custom', decider: 'chat', typesafe: { baseURL: 'https://gateway.test/systemone', model: 'jev-1' },
+    textModel: { baseURL: 'https://gateway.test/v1', model: 'text-1', apiKey: 'literal-text-key' },
+  } }) }
+  const unused = await jev.jevEnvironment(both, withCredentials, undefined)
+  ok(unused.env.JEV_DECIDER === 'chat' && !('TYPESAFE_BASE_URL' in unused.env)
+    && /unused with jev\.decider: chat/u.test(unused.describe.join('; ')),
+  'chat: a TypeSafe setting nobody reads is named in the doctor rather than refusing the configuration')
   console.log(`PASS: ${count} engine-configuration checks; no browser, no model calls`)
 }
 
@@ -475,38 +520,34 @@ async function settingsForm() {
   }
   const fields = formFields(config.Config).sort()
   ok(JSON.stringify(fields) === JSON.stringify([
-    'jev.enabled', 'jev.source',
-    'jev.textModel.apiKey', 'jev.textModel.apiKeyEnv', 'jev.textModel.baseURL', 'jev.textModel.model',
+    'jev.decider',
     'jev.typesafe.apiKey', 'jev.typesafe.apiKeyEnv', 'jev.typesafe.baseURL', 'jev.typesafe.model',
-  ].sort()), `the form offers jev and nothing else (got ${fields.join(', ')})`)
+  ].sort()), `the form offers the decider and the Jev endpoint and nothing else (got ${fields.join(', ')})`)
   ok(!fields.includes('mode') && !fields.includes('delegate') && !fields.includes('allowScreenshots')
     && !fields.includes('projectPath') && !fields.includes('reserveBrowserUseSlot'),
   'the switches that decide which tools exist stay profile-patch settings')
+  ok(!fields.includes('jev.enabled') && !fields.includes('jev.source') && !fields.some(field => field.startsWith('jev.textModel')),
+    'there is no switch to turn Jev off, and the text model is inherited, so neither is a form field')
 
   // A live edit: the Loader commits the value into the reference the plugin was handed.
   const { ctx, tools, agent, emit } = fakeContext()
   const parsed = config.Config({
     pythonPath: '/nonexistent/python',
     projectPath: '',
-    jev: { enabled: false },
   })
-  ok(typeof parsed.jev.enabled?.get === 'function' && config.plain(parsed.jev.enabled) === false,
-    'a live field arrives as a reference the plugin can read now')
+  ok(typeof parsed.jev.decider?.get === 'function' && config.plain(parsed.jev.decider) === 'typesafe',
+    'the one live field arrives as a reference the plugin can read now')
   plugin.apply(ctx, parsed)
   const doctor = async () => (await tools.get('browser_doctor').execute({}, { agent, signal: new AbortController().signal })).text
-  ok(!tools.has('browser_goal'), 'browser_goal is absent until the Settings page turns jev on')
   const actSchema = () => tools.get('browser_act').parameters
-  ok(actSchema().properties.intent === undefined && actSchema().required.includes('operation'),
-    'with jev off, browser_act takes an operation and offers no intent')
+  ok(tools.has('browser_goal') && actSchema().properties.intent?.type === 'string' && !actSchema().required.includes('operation'),
+    'browser_goal and browser_act intents are offered with the plugin: there is nothing to switch on first')
 
   const LIVE = Symbol.for('cosmokit.volatile.write')
-  parsed.jev.enabled[LIVE](true)
+  parsed.jev.decider[LIVE]('chat')
   parsed.jev.typesafe.baseURL[LIVE]('https://gateway.test/systemone')
-  emit('loader/volatile-update', [['jev', 'enabled'], ['jev', 'typesafe', 'baseURL']])
+  emit('loader/volatile-update', [['jev', 'decider'], ['jev', 'typesafe', 'baseURL']])
 
-  ok(tools.has('browser_goal'), 'turning jev on from the plugin form offers browser_goal without a restart')
-  ok(actSchema().properties.intent?.type === 'string' && !actSchema().required.includes('operation'),
-    'turning jev on lets browser_act take an intent in place of an operation')
   const act = args => tools.get('browser_act').execute(args, { agent, signal: new AbortController().signal })
   ok(/^Refused: Jev cannot run/u.test((await act({ observation: 1, intent: 'Submit the form' })).text),
     'an intent whose Jev credentials cannot be resolved is refused before any browser or model call')

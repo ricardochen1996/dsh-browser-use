@@ -56,6 +56,26 @@ const primitivesStub = () => ({
   Menu: props => ({ type: 'div', props, children: [props.anchor] }),
 })
 
+/**
+ * The shell's locale service, cut down to what the client half uses: the dictionaries it registers,
+ * a binding that resolves the active language at call time, and the revision pair the settings rows'
+ * translator rides. `active` is the test's own language switch.
+ */
+const localeStub = () => {
+  const dictionaries = new Map()
+  const stub = {
+    active: 'en',
+    registered: [],
+    // The real registry disposes a dictionary with the plugin; nothing here unloads one, and a
+    // disposer the effects loop calls must not take the copy away from the assertions below.
+    register: (ns, dicts) => { stub.registered.push({ ns, dicts }); dictionaries.set(ns, dicts); return () => {} },
+    bind: ns => key => dictionaries.get(ns)?.[stub.active]?.[key] ?? key,
+    getSnapshot: () => ({ revision: 0 }),
+    subscribe: () => () => {},
+  }
+  return stub
+}
+
 /** The registrations the client half makes, recorded the way the shell would receive them. */
 async function checkClientHalf() {
   const registrations = []
@@ -85,13 +105,16 @@ async function checkClientHalf() {
 
   const plugin = loaded.factory(require)
   check(plugin.name === 'dsh-browser-use-client' && typeof plugin.apply === 'function', 'the factory returns a Cordis plugin face')
-  check(plugin.inject.includes('slots') && plugin.inject.includes('sidebarRightTabs'), 'the client half injects the slots and tab registries')
+  check(['slots', 'sidebarRightTabs', 'locale'].every(service => plugin.inject.includes(service)),
+    'the client half injects the slots, tab registry and locale services')
   check(required.includes('@deepseek-ai/dsh-client-ui-primitives'),
     'the form draws its controls with the shell\u2019s own primitives instead of raw inputs')
 
+  const locale = localeStub()
   const ctx = {
     slots,
     sidebarRightTabs,
+    locale,
     // No settings mirror in this composition: the row page still registers, the bundle card does not.
     inject: () => {},
     effect: callback => { const disposer = callback(); effects.push(disposer); return () => {} },
@@ -99,14 +122,26 @@ async function checkClientHalf() {
   plugin.apply(ctx)
   for (const effect of effects) effect()
 
+  const copy = locale.registered.find(entry => entry.ns === 'browserUse')
+  check(copy?.dicts?.zh !== undefined && copy?.dicts?.en !== undefined,
+    'the client half registers both shipped locales for its own namespace')
+  check(JSON.stringify(Object.keys(copy.dicts.zh).sort()) === JSON.stringify(Object.keys(copy.dicts.en).sort()),
+    'the Chinese and English dictionaries carry the same keys, so neither language shows a raw key')
+
   const tab = registrations.find(entry => entry.tab)?.tab
   check(tab?.id === 'dsh-browser-use/inspector' && tab.kind === 'browser-use', 'a right-Sidebar tab type is registered')
   check(typeof tab.title === 'function' && typeof tab.guide?.[0]?.title === 'function', 'the tab type carries a title and a guide card')
+  check(tab.title() === 'Browser agent', 'the tab title reads the English copy while English is the active language')
+  locale.active = 'zh'
+  check(tab.title() === '浏览器代理' && tab.guide[0].description() === '查看浏览器工具正在操作的页面。',
+    'the tab and its guide card follow the active language without re-registering')
+  locale.active = 'en'
 
   const body = registrations.find(entry => entry.options)?.options
   check(body?.name === 'sidebar.right.pane.tab' && body.key === tab.id, 'the tab body is registered under its own slot key')
   const element = registrations.find(entry => entry.component).component()
   check(element.type === 'iframe' && element.props.src === '/browser-use/', 'the tab body frames the host route')
+  check(element.props.title === 'Browser agent', 'the framed page keeps an accessible title from the same dictionary')
   check(registrations.some(entry => entry.options?.name === 'plugins.row.config'),
     'the row configuration still registers without a settings mirror')
 }
@@ -128,13 +163,15 @@ async function checkSwitchForm() {
   const plugin = globalThis.__loaded.factory(require)
   const cardWrites = []
   const controller = {
-    getSnapshot: () => ({ status: 'ready', writable: true, revision: 3, value: { mode: 'attach', jev: { enabled: true } } }),
+    getSnapshot: () => ({ status: 'ready', writable: true, revision: 3, value: { mode: 'attach', jev: { decider: 'typesafe' } } }),
     subscribe: () => () => {},
     mutate: (operations, revision) => { cardWrites.push({ operations, revision }); return Promise.resolve(true) },
   }
+  const locale = localeStub()
   const ctx = {
     slots,
     sidebarRightTabs: { register: () => () => {} },
+    locale,
     effect: callback => { const disposer = callback(); effects.push(disposer); return () => {} },
     inject: (names, callback) => {
       if (names.includes('configForms')) callback({ slots, effect: ctx.effect, configForms: { get: () => controller } })
@@ -149,9 +186,29 @@ async function checkSwitchForm() {
   const card = registrations.find(entry => entry.options?.name === 'plugins.bundle.config')
   check(card?.options.key === '@ricardochen1996/dsh-browser-use',
     'the bundle page card is registered under the bundle name, so the switches show without opening a row')
+  check(page.options.locale === 'browserUse' && card.options.locale === 'browserUse',
+    'both form registrations declare the locale namespace, so the renderer seats their translator')
+
+  /** The text of every node carrying one class, in document order. */
+  const textsOf = (element, className) => {
+    const found = []
+    const walk = node => {
+      if (Array.isArray(node)) return node.forEach(walk)
+      if (node === null || typeof node !== 'object') return
+      if (node.props?.className === className) { found.push(node.children.flat(Infinity).join('')); return }
+      if (typeof node.type === 'function') return walk(node.type(node.props))
+      ;(node.children ?? []).forEach(walk)
+    }
+    walk(element)
+    return found
+  }
+  const labelsOf = element => textsOf(element, 'dsh-bu-label')
+  const hintsOf = element => textsOf(element, 'dsh-bu-hint')
 
   check(page.component({ view: 'summary', form: undefined }) === null, 'the row summary draws nothing, so the metadata description stands')
   check(page.component({ view: 'page', form: undefined }) !== null, 'a page without a form says so instead of throwing')
+  const refusal = hintsOf(page.component({ view: 'page', form: undefined }))[0]
+  check(refusal?.includes('provides no configuration form'), `the refusal reads English while English is active (got ${refusal})`)
 
   // A miniature renderer: expand the function components, keep host elements.
   const render = node => {
@@ -179,21 +236,47 @@ async function checkSwitchForm() {
 
   const writes = []
   const form = {
-    state: { status: 'ready', writable: true, revision: 7, value: { jev: { enabled: false, source: 'session', typesafe: {} } } },
+    state: { status: 'ready', writable: true, revision: 7, value: { jev: { decider: 'typesafe', source: 'session', typesafe: {} } } },
     mutate: (operations, revision) => { writes.push({ operations, revision }); return Promise.resolve(true) },
   }
   const pageFields = pathsOf(page.component({ view: 'page', form }))
   check(JSON.stringify(pageFields) === JSON.stringify([
-    'jev.enabled', 'jev.source',
-    'jev.textModel.apiKey', 'jev.textModel.apiKeyEnv', 'jev.textModel.baseURL', 'jev.textModel.model',
-    'jev.typesafe.apiKey', 'jev.typesafe.apiKeyEnv', 'jev.typesafe.baseURL', 'jev.typesafe.model',
-  ].sort()), `the form offers jev and nothing else (got ${pageFields.join(', ')})`)
+    'jev.decider',
+    'jev.typesafe.apiKeyEnv', 'jev.typesafe.baseURL', 'jev.typesafe.model',
+  ].sort()), `the form offers the decider and TypeSafe and nothing else (got ${pageFields.join(', ')})`)
 
-  // The toggle is the shell's Switch: a button that asks for the opposite state.
-  controlFor(page.component({ view: 'page', form }), 'jev.enabled').find(node => node.type === 'button').props.onClick()
-  check(writes[0]?.operations?.[0]?.op === 'set' && writes[0].operations[0].path.join('.') === 'jev.enabled'
-    && writes[0].operations[0].value === true && writes[0].revision === 7,
-  'toggling browser_goal writes the live path with the revision the page read')
+  // One switch, two answers: no way to turn Jev off, because who answers it is the only question.
+  const decider = controlFor(page.component({ view: 'page', form }), 'jev.decider')
+    .find(node => typeof node.props?.onSelect === 'function')
+  check(JSON.stringify(decider.props.items.map(item => item.id)) === JSON.stringify(['typesafe', 'chat'])
+    && decider.props.selectedId === 'typesafe',
+  'the switch offers exactly the two things that can answer, and no off')
+  decider.props.onSelect('chat')
+  check(writes[0]?.operations?.[0]?.op === 'set' && writes[0].operations[0].path.join('.') === 'jev.decider'
+    && writes[0].operations[0].value === 'chat' && writes[0].revision === 7,
+  'picking the text model writes the decider with the revision the page read')
+
+  // The copy follows the shell's active language: the same registration, the same rows, read twice.
+  const englishLabels = labelsOf(page.component({ view: 'page', form }))
+  check(JSON.stringify(englishLabels) === JSON.stringify(['Decider', 'Jev URL', 'Jev Model', 'Jev API key credential']),
+    `the rows read English while English is active (got ${englishLabels.join(', ')})`)
+  check(JSON.stringify(controlFor(page.component({ view: 'page', form }), 'jev.decider')
+    .find(node => typeof node.props?.onSelect === 'function').props.items.map(item => item.label))
+    === JSON.stringify(['Jev', 'Text model (no Jev key needed)']),
+  'the decider menu entries read English too')
+  check(hintsOf(page.component({ view: 'page', form }))[0]?.startsWith('Jev is always on'),
+    'the hint under the decider reads English too')
+  locale.active = 'zh'
+  const chineseLabels = labelsOf(page.component({ view: 'page', form }))
+  check(JSON.stringify(chineseLabels) === JSON.stringify(['决策者', 'Jev URL', 'Jev Model', 'Jev API key 凭据名']),
+    `the same rows read Chinese once the active language changes (got ${chineseLabels.join(', ')})`)
+  check(hintsOf(page.component({ view: 'page', form }))[0]?.startsWith('Jev 常开'),
+    'the hint follows the active language as well')
+  check(hintsOf(page.component({ view: 'page', form: undefined }))[0]?.includes('没有提供'),
+    'the refusal follows the active language as well')
+  locale.active = 'en'
+  check(labelsOf(card.component({ view: 'page' }))[0] === 'Decider',
+    'the bundle page card, which renders outside the shell\u2019s `t` prop, reads the same dictionary')
 
   // A text field commits on blur, not on every keystroke.
   const url = controlFor(page.component({ view: 'page', form }), 'jev.typesafe.baseURL').find(node => node.type === 'input')
@@ -201,27 +284,26 @@ async function checkSwitchForm() {
   url.props.onBlur({ target: { value: 'https://gateway.test/systemone' } })
   check(writes[1]?.operations?.[0]?.value === 'https://gateway.test/systemone', 'a typed endpoint is written when the field settles')
 
-  // The source is the shell's Menu: a pick writes the chosen id.
-  const source = controlFor(page.component({ view: 'page', form }), 'jev.source').find(node => typeof node.props?.onSelect === 'function')
-  source.props.onSelect('custom')
-  check(writes[2]?.operations?.[0]?.path.join('.') === 'jev.source' && writes[2].operations[0].value === 'custom',
-    'picking a credential source writes the chosen id')
-
-  const before = writes.length
-  const secret = controlFor(page.component({ view: 'page', form }), 'jev.typesafe.apiKey').find(node => node.type === 'input')
-  check(secret.props.type === 'password', 'a key is drawn as a password field')
-  secret.props.onBlur({ target: { value: '' } })
-  check(writes.length === before, 'an untouched secret is not written back, so the stored key survives the form')
+  // The credential is named rather than typed in: the row offers the DSH credential name, and the
+  // plaintext key stays a profile-patch setting that never rides a form response.
+  const credential = controlFor(page.component({ view: 'page', form }), 'jev.typesafe.apiKeyEnv').find(node => node.type === 'input')
+  check(credential.props.placeholder === 'OPENCODE_GATEWAY_API_KEY' && credential.props.type === 'text',
+    'the credential row suggests a credential name in a plain text field')
+  credential.props.onBlur({ target: { value: 'OPENCODE_GATEWAY_API_KEY' } })
+  check(writes[2]?.operations?.[0]?.path?.join('.') === 'jev.typesafe.apiKeyEnv'
+    && writes[2].operations[0].value === 'OPENCODE_GATEWAY_API_KEY',
+  'a typed credential name is written when the field settles')
 
   // The bundle page's card reads the namespace itself, so its write goes through that controller.
   const cardElement = card.component({ view: 'page' })
   check(JSON.stringify(pathsOf(cardElement)) === JSON.stringify(pageFields),
     'the bundle page card draws the same switches as the row page')
-  controlFor(cardElement, 'jev.enabled').find(node => node.type === 'button').props.onClick()
-  // The mirror reports jev on, so the toggle asks for off — and the write carries the mirror's revision.
-  check(cardWrites[0]?.operations?.[0]?.path.join('.') === 'jev.enabled' && cardWrites[0].operations[0].value === false
-    && cardWrites[0].revision === 3,
-  'a switch on the bundle page writes through the settings mirror with the revision it read')
+  controlFor(cardElement, 'jev.decider').find(node => node.props?.onSelect !== undefined).props.onSelect('chat')
+  // The mirror reports TypeSafe deciding, so the pick writes the other one — with the mirror's revision.
+  check(JSON.stringify(cardWrites[0]) === JSON.stringify({
+    operations: [{ op: 'set', path: ['jev', 'decider'], value: 'chat' }],
+    revision: 3,
+  }), 'a switch on the bundle page writes through the settings mirror with the revision it read')
 }
 
 /** The host route as the shell reaches it: same handler, a real HTTP server. */

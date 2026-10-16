@@ -58,7 +58,10 @@ def update(checkout):
     if not SOURCE.search(text):
         raise SystemExit("pyproject.toml has no `jev-ultrafast = { ... }` line under [tool.uv.sources].")
     pyproject.write_text(SOURCE.sub(f'jev-ultrafast = {{ path = "vendor/{wheel.name}" }}', text, count=1))
-    subprocess.run(["uv", "lock"], cwd=ROOT, check=True)
+    # A replaced path source keeps its recorded hash otherwise: `uv lock` answers from its cache
+    # ("Resolved 24 packages in 8ms") and leaves the previous wheel's hash in the lock. Refresh the
+    # one package that changed, so the lock names the bytes that are actually here.
+    subprocess.run(["uv", "lock", "--refresh-package", "jev-ultrafast"], cwd=ROOT, check=True)
     print(f"Bundled {wheel.name} from {repository} at {rev}.")
 
 

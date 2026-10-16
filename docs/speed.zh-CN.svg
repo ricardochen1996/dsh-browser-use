@@ -5,7 +5,7 @@
 <text x="48" y="64" font-size="28" font-weight="800" fill="#f8fafc">同一个任务，中位耗时</text>
 <text x="48" y="96" font-size="15" fill="#94a3b8">本地酒店搜索页 · 输入城市、勾两个筛选、搜索、打开结果 · 每组 3 轮交替 · 2026-09-30</text>
 <text x="48" y="166" font-size="20" font-weight="700" fill="#fde68a">开启 jev ⚡</text>
-<text x="48" y="190" font-size="13" fill="#94a3b8">TypeSafe jev-1.13 + deepseek-v4.1-flash</text>
+<text x="48" y="190" font-size="13" fill="#94a3b8">Jev jev-1.13 + deepseek-v4.1-flash</text>
 <rect x="430" y="146" width="181" height="44" rx="10" fill="url(#fast)"/>
 <text x="627" y="176" font-size="22" font-weight="800" fill="#fde68a">10.7 s</text>
 <text x="627" y="196" font-size="12" fill="#94a3b8">每步决策中位 1.1 s · 校验通过 3/3</text>
