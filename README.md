@@ -565,7 +565,7 @@ In GitHub, create the **`npm` environment** and allow version-tag deployments. R
 
 ### Cut the next version
 
-Start from a clean, up-to-date `main` checkout, with the engine checkout the tests drive (`../jev-ultrafast`) at the revision `vendor/jev-ultrafast.json` names. Keep all three version records together:
+Start from a clean, up-to-date `main` checkout, with the engine checkout the tests drive (`../jev-ultrafast`) at the revision `vendor/jev-ultrafast.json` names. Write the release's entry in [`CHANGELOG.md`](CHANGELOG.md) first — Added / Changed / Fixed, under a `## [x.y.z] - YYYY-MM-DD` heading — then keep all three version records together:
 
 ```bash
 npm version 0.5.2 --no-git-tag-version
@@ -574,7 +574,7 @@ npm run check
 npm run test:e2e
 npm run release:pack
 
-git add package.json pyproject.toml uv.lock vendor/requirements.txt
+git add CHANGELOG.md package.json pyproject.toml uv.lock vendor/requirements.txt
 git commit -m "chore(release): v0.5.2"
 git tag -a v0.5.2 -m "v0.5.2"
 git push --atomic origin main v0.5.2

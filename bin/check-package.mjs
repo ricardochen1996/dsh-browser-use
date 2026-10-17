@@ -24,7 +24,7 @@ assert.equal(packed.version, manifest.version)
 assert.equal(basename(packed.filename), packed.filename)
 const files = new Set(packed.files.map(file => file.path))
 for (const path of [
-  'package.json', 'LICENSE', 'README.md', 'README.zh-CN.md', 'icon.svg', 'cordis.patch.yml',
+  'package.json', 'LICENSE', 'README.md', 'README.zh-CN.md', 'CHANGELOG.md', 'icon.svg', 'cordis.patch.yml',
   'pyproject.toml', 'uv.lock', 'sidecar/bridge.py', 'bin/doctor.mjs', 'lib/provision.js', 'lib/python.js',
   'vendor/jev-ultrafast.json', 'vendor/requirements.txt', `vendor/${engine.wheel}`,
   'locale/en.json', 'locale/zh.json', 'bench/results.json', 'bench/fixture.html',

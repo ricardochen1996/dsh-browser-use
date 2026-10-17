@@ -1,6 +1,6 @@
 {
   "name": "@ricardochen1996/dsh-browser-use",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "packageManager": "pnpm@12.5.1",
   "type": "module",
   "description": "DeepSeek Harness browser provider: read a page as an indexed action space, then run one guarded operation at a time.",
@@ -34,6 +34,7 @@
     "lib/engine.js",
     "lib/provision.js",
     "lib/python.js",
+    "lib/progress.js",
     "lib/sessions.js",
     "lib/sidecar.js",
     "lib/tools.js",
@@ -47,6 +48,7 @@
     "locale/*.json",
     "README.md",
     "README.zh-CN.md",
+    "CHANGELOG.md",
     "docs/*.svg",
     "pyproject.toml",
     "uv.lock",
@@ -62,10 +64,10 @@
   },
   "scripts": {
     "doctor": "node bin/doctor.mjs",
-    "test": "node test/plugin.mjs && node test/delegation.mjs && node test/inspector.mjs && node test/provision.mjs",
+    "test": "node test/plugin.mjs && node test/delegation.mjs && node test/inspector.mjs && node test/provision.mjs && node test/progress.mjs",
     "test:python": "uv run pytest",
     "test:e2e": "uv run python test/check_bridge.py && uv run python test/check_tabs.py",
-    "check": "uv run ruff check . && uv run pytest -q && npm run release:check && node test/plugin.mjs && node test/delegation.mjs && node test/inspector.mjs && node test/provision.mjs",
+    "check": "uv run ruff check . && uv run pytest -q && npm run release:check && node test/plugin.mjs && node test/delegation.mjs && node test/inspector.mjs && node test/provision.mjs && node test/progress.mjs",
     "release:check": "uv run python bin/check_release.py",
     "release:pack": "npm run release:check && node bin/check-package.mjs"
   },

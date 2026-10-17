@@ -566,7 +566,7 @@ npx npm@11.20.0 trust github @ricardochen1996/dsh-browser-use --file release.yml
 
 ### 发布下一个版本
 
-从干净、已更新的 `main` checkout 开始，同级放好测试驱动的引擎 checkout（`../jev-ultrafast`，位于 `vendor/jev-ultrafast.json` 记录的 revision），一起更新三处版本记录：
+从干净、已更新的 `main` checkout 开始，同级放好测试驱动的引擎 checkout（`../jev-ultrafast`，位于 `vendor/jev-ultrafast.json` 记录的 revision）。先在 [`CHANGELOG.md`](CHANGELOG.md) 里写好本版本的条目——`## [x.y.z] - YYYY-MM-DD` 标题下的 Added / Changed / Fixed——再一起更新三处版本记录：
 
 ```bash
 npm version 0.5.2 --no-git-tag-version
@@ -575,7 +575,7 @@ npm run check
 npm run test:e2e
 npm run release:pack
 
-git add package.json pyproject.toml uv.lock vendor/requirements.txt
+git add CHANGELOG.md package.json pyproject.toml uv.lock vendor/requirements.txt
 git commit -m "chore(release): v0.5.2"
 git tag -a v0.5.2 -m "v0.5.2"
 git push --atomic origin main v0.5.2
