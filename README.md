@@ -58,8 +58,8 @@ The engine (`jev_ultrafast`) is **a separate repository**. This package ships on
 
 | Tool | Job |
 | --- | --- |
-| `browser_task` | Hand a goal to this conversation's **persistent browser subagent**: the first call starts it, and every later call sends the new task to the **same** subagent (it remembers the page and what it did before). The call returns immediately; the conclusion comes back later as a message. `fresh: true` swaps in a new subagent with no memory. |
-| `browser_task_status` | What the persistent browser subagent is doing: working (for how long, on which task, on which page) or idle (how its last run ended, its closing message). The conclusion arrives as a message without calling it; `wait: true` blocks until the subagent finishes or messages you, or the user writes (`timeout_ms`, default 2 min, at most 10 min) — only for a step that cannot go on without the result. |
+| `browser_task` | Hand a goal to this conversation's **persistent browser subagent**: the first call starts it, and every later call sends the new task to the **same** subagent (it remembers the page and what it did before). The call returns immediately; short progress pushes arrive while it works and the conclusion comes back later as a message. `fresh: true` swaps in a new subagent with no memory. |
+| `browser_task_status` | A snapshot on request of what the persistent browser subagent is doing: working (for how long, on which task, on which page) or idle (how its last run ended, its closing message). You do not need it to watch progress — progress is pushed to you and the conclusion arrives as a message anyway — so **`wait: true` is the last resort**: it blocks until the subagent finishes or messages you, or the user writes (`timeout_ms`, default 2 min, at most 10 min), and is only for a step that cannot go on without the result. |
 | `browser_doctor` | Self-check: interpreter, engine version, engine install progress, browser, delegation status (including whether this conversation's subagent is working), and a fix command for each missing piece. `install: true` installs the engine now, or retries a failed install. |
 
 The browser tools live in the **delegated subagent's scope** (6 by default, with `browser_goal` off). Only it can see and call them:
@@ -78,8 +78,16 @@ The browser tools live in the **delegated subagent's scope** (6 by default, with
 
 - **New task**: call `browser_task` again — the task is delivered as a message into the same subagent's conversation; if it is busy it is admitted at the next step boundary, if idle it starts right away, and if it was released it cold-starts from persistence (browser tools re-attach automatically).
 - **Two-way messaging**: the subagent is granted only the global `send_message`, so it can send you progress, questions and results at any time; you use `send_message` to add to or correct the current task, and `interrupt_agent` to stop it.
-- **Results come back on their own**: the subagent sends its conclusion back; when it goes idle DSH also sends the main agent a "Background subagent … finished" notification and wakes it, so no polling. The `browser_task` receipt says so explicitly — keep working or end the turn, never `sleep` in a shell — and, where an agent team is present, that its `wait_agent` / `list_agents` do not see this subagent.
-- **Status on request**: `browser_task_status` reads the subagent's state from the host's own `subagent/start` / `subagent/end` events and the agent registry. With `wait: true` it blocks on the same settlement the notification rides on, instead of guessing with `sleep`, and returns early when the user writes or the subagent messages the main agent.
+- **Progress while it works**: the plugin pushes its own record of each browser step (`Sessions.observed()` / `noteAction()`) into this conversation as an `agent-message` from the subagent, coalesced to **at most one per `progressIntervalMs`** (default 30 s). A push wakes a conversation that has ended its turn, so you end your turn or keep working and the next one wakes you — **no polling and no blocking**, and `wait: true` is not how you watch progress. Every push is two lines:
+
+  ```text
+  Browser subagent "<childId>" progress — <duration> into the task (status only; no reply needed).
+  Page: <title> — <url> (observation 1).
+  ```
+
+  That is a first push: it comes right after the page is read, so no action has run yet. The `, last action: <action>` clause joins in once an action has run, and `<title> — ` appears only when the page has a title. Before the first page read the second line is `It has not read a page yet.` A push is **informational only**: do not reply to it, do not re-task, and do not treat it as the report — the report is the conclusion below.
+- **Results come back on their own**: the subagent sends its conclusion back; when it goes idle DSH also sends the main agent a "Background subagent … finished" notification and wakes it, so neither polling nor blocking is ever needed. The `browser_task` receipt says so explicitly — keep working or end the turn, never `sleep` in a shell — and, where an agent team is present, that its `wait_agent` / `list_agents` do not see this subagent.
+- **Status on request**: `browser_task_status` reads the subagent's state from the host's own `subagent/start` / `subagent/end` events and the agent registry. With `wait: true` it blocks on the same settlement the notification rides on, instead of guessing with `sleep`, and returns early when the user writes or the subagent messages the main agent — reserve it for a step that cannot go on without the result.
 - **Survives restarts**: the subagent is recorded under the tag `browser-task` in the parent session's directory, so after a DSH restart or resume the next `browser_task` / `send_message` finds the same subagent.
 
 When the provider doesn't support continuable subagents (or `delegateMode: one-shot` is set), it falls back to **one-shot delegation**: one subagent per task, and `browser_task` returns after it reports back.
@@ -112,7 +120,7 @@ Every decision is bound to the observation fingerprint: if the page changed, it 
 Screenshots are not fed to the model (they're for humans); each step sends only structured text: visible text + element table + the operations available this round.
 
 ### 3b. The main agent never reads the page
-The table, indices, refusals and re-reads all happen in the subagent's context; the conversation receives only a conclusion. However complex the page, the main agent's context stays the same length — and it has **no** tool that could misclick a page.
+The table, indices, refusals and re-reads all happen in the subagent's context; the conversation receives only short progress lines and a conclusion. However complex the page, the main agent's context stays the same length — and it has **no** tool that could misclick a page.
 
 ### 4. The model doesn't have to guess what's possible
 The table lists **the operations and targets allowed on this frame**, including every option of a dropdown (`6:1 → Stay category → Design`). Unsupported operations, occluded controls and disabled fields simply never appear in the table.
@@ -328,7 +336,7 @@ The **text model is not a form field** either, on purpose: it is the main conver
 
 `jev.decider` and `jev.typesafe.apiKey` are `.volatile()`: a change takes effect on the spot (the next `browser_goal` or intent-bearing `browser_act` uses the new value). The key is submitted with `role('secret')`, so it never appears in any form response: the field starts blank every time, a blank one means "don't touch the stored key", and a write that lands answers `Saved`. To **remove** a key again, delete its line from the profile patch.
 
-**All other switches are changed in the profile patch** (after which DSH remounts the plugin, as before): `mode`, `cdpEndpoint`, `executablePath`, `userDataDir`, `headless`, `allowScreenshots`, `requestTimeoutMs`, `delegate`, `delegateMode`, `subagentProvider`, `maxDepth`, `projectPath`, `pythonPath`, `reserveBrowserUseSlot`, `jev.enabled`, `jev.typesafe.fallbackURL`, `jev.typesafe.apiKeyEnv`, `jev.source`, `jev.textModel.baseURL`, `jev.textModel.model`, `jev.textModel.reasoning`, `jev.textModel.headers`, `jev.textModel.apiKey` / `.apiKeyEnv`. They decide **which tools exist**, which interpreter runs, and whether a composition slot is taken — or describe a text model a person should not have to think about — making them form fields would promise an "immediate effect" that can't be delivered. `jev.typesafe.apiKeyEnv` stays available for a patch that would rather **name** a stored credential (a DSH credential from the Models page, or an environment variable) than keep the key in the profile file; naming the key there instead is refused, with the fix.
+**All other switches are changed in the profile patch** (after which DSH remounts the plugin, as before): `mode`, `cdpEndpoint`, `executablePath`, `userDataDir`, `headless`, `allowScreenshots`, `requestTimeoutMs`, `delegate`, `delegateMode`, `subagentProvider`, `maxDepth`, `projectPath`, `pythonPath`, `reserveBrowserUseSlot`, `progress`, `progressIntervalMs`, `jev.enabled`, `jev.typesafe.fallbackURL`, `jev.typesafe.apiKeyEnv`, `jev.source`, `jev.textModel.baseURL`, `jev.textModel.model`, `jev.textModel.reasoning`, `jev.textModel.headers`, `jev.textModel.apiKey` / `.apiKeyEnv`. They decide **which tools exist**, which interpreter runs, whether a composition slot is taken or how talkative the subagent is while it works — or describe a text model a person should not have to think about — making them form fields would promise an "immediate effect" that can't be delivered. `jev.typesafe.apiKeyEnv` stays available for a patch that would rather **name** a stored credential (a DSH credential from the Models page, or an environment variable) than keep the key in the profile file; naming the key there instead is refused, with the fix.
 
 After a first pass through the UI, the YAML form below still works (and is the only entry point for fields like `projectPath`):
 
@@ -409,6 +417,8 @@ In every mode, the endpoint and key used by `browser_goal` and `browser_act`'s `
 | `delegateMode` | `persistent` | `persistent`: one persistent browser subagent per conversation, receiving all later tasks; `one-shot`: one subagent per task, returning after it reports. Falls back to `one-shot` automatically when the provider doesn't support continuable subagents |
 | `subagentProvider` | `spawn` | the provider name in `ctx.subagents`; it must be able to compose an **in-process** subagent, otherwise it falls back to direct mode |
 | `maxDepth` | `0` | delegation-depth cap for the subagent; `0` means use the provider's own recursion budget |
+| `progress` | `true` | push a short progress message into this conversation while the subagent works; `false` turns the stream off. No form field — the Settings form has no switch for it |
+| `progressIntervalMs` | `30000` | the shortest gap between two progress messages, with a `1000` ms floor at use time. Every push may start a parent turn, so **a smaller interval is more live but spends more tokens**. No form field |
 
 ✎ = appears in the form under **Sidebar → Plugins → `@ricardochen1996/dsh-browser-use`** (the package page, or the "Configure" in the row title), with immediate effect (the next time the value is used); fields without ✎ are set only in the profile patch. The form is bilingual: its labels, hints and refusals come from the shell's own locale service, so it reads **English** or **中文** with the interface.
 
@@ -478,6 +488,7 @@ DSH host (Node)                                        ← this repo's lib/
                   │     └─ the subagent's scope: browser_* is registered only here
                   │        the subagent gets only send_message; other global tools are blocked
                   ── ctx.on(subagent/start, subagent/end, agent/inbox/inserted)   the subagent's state, for browser_task_status
+                  ── progress agent-message into the parent conversation   its own record of every step, coalesced
                   ── ctx.systemPrompt.section(subagent usage rules)
                   ── ctx.webServer.register('/browser-use')     panel route
                   └─ one sidecar process per Session, serialized operations (reused across delegations)

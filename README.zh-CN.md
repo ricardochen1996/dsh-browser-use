@@ -58,8 +58,8 @@ dsh-browser-use/
 
 | 工具 | 作用 |
 | --- | --- |
-| `browser_task` | 把一个目标交给本对话的**常驻浏览器子 agent**：第一次调用启动它，之后每次调用都把新任务发给**同一个**子 agent（它记得页面和之前做过什么）。调用立即返回，结论稍后以消息形式回到对话。`fresh: true` 换一个没有记忆的新子 agent |
-| `browser_task_status` | 常驻浏览器子 agent 在干什么：工作中（干了多久、哪个任务、在哪个页面），或空闲（上一轮怎么结束的、收尾消息）。不调它结论也会以消息形式自动送达；`wait: true` 会阻塞到子 agent 完成或给你发消息、或用户发话为止（`timeout_ms` 默认 2 分钟，最多 10 分钟）——只在离了结果就没法往下走时用 |
+| `browser_task` | 把一个目标交给本对话的**常驻浏览器子 agent**：第一次调用启动它，之后每次调用都把新任务发给**同一个**子 agent（它记得页面和之前做过什么）。调用立即返回，干活期间会主动推进度，结论稍后以消息形式回到对话。`fresh: true` 换一个没有记忆的新子 agent |
+| `browser_task_status` | 按需取一次快照：常驻浏览器子 agent 在干什么——工作中（干了多久、哪个任务、在哪个页面），或空闲（上一轮怎么结束的、收尾消息）。看进度不用调它——进度会自己推过来（见下），结论本来也会以消息形式自动送达；所以 **`wait: true` 是最后的办法**：它会阻塞到子 agent 完成或给你发消息、或用户发话为止（`timeout_ms` 默认 2 分钟，最多 10 分钟），只在离了结果就没法往下走时用 |
 | `browser_doctor` | 自检：解释器、引擎版本、引擎安装进度、浏览器、委派状态（含本对话的子 agent 是否在工作）、以及每一项缺失的修复命令。`install: true` 立即安装引擎，或重试一次失败的安装 |
 
 浏览器工具挂在**被委派的子 agent 的 scope** 里（默认 6 个，`browser_goal` 关闭时）。只有它看得见、只有它能调用：
@@ -78,8 +78,16 @@ dsh-browser-use/
 
 - **派新任务**：再调一次 `browser_task`，任务作为消息送进同一个子 agent 的会话；它正在忙就在下一步边界插入，空闲就直接开工，已被释放就从持久化里冷启动恢复（浏览器工具自动重新挂上）。
 - **双向通信**：子 agent 只额外放开了全局的 `send_message`，可以随时给主 agent 发进度、提问、交结果；主 agent 用 `send_message` 给它补充/纠正当前任务，用 `interrupt_agent` 叫停。
-- **结果自动回来**：子 agent 干完会把结论发回来；它空闲下来时 DSH 还会给主 agent 发一条"Background subagent … finished"的通知并唤醒它，不用轮询。`browser_task` 的回执会把这点说清楚——继续干别的或结束本轮，不要在 shell 里 `sleep`；组合里有 agent team 时还会注明它的 `wait_agent` / `list_agents` 看不到这个子 agent。
-- **随时查状态**：`browser_task_status` 从宿主自己的 `subagent/start` / `subagent/end` 事件和 agent 注册表读出子 agent 的状态。`wait: true` 等的是通知所依据的同一次结算，而不是靠 `sleep` 去猜；用户发话或子 agent 给主 agent 发消息时会提前返回。
+- **干活期间主动推进度**：插件把自己记录的每一步浏览器操作（`Sessions.observed()` / `noteAction()`）以子 agent 名义发出的 `agent-message` 推进本对话，节流合并成**每 `progressIntervalMs` 最多一条**（默认 30 秒）。推送会把已经结束本轮的对话唤醒，所以你尽管结束本轮或继续干别的，下一条会把你叫醒——**不用轮询，也不用阻塞**，`wait: true` 不是用来看进度的。每条推送固定两行：
+
+  ```text
+  Browser subagent "<childId>" progress — <duration> into the task (status only; no reply needed).
+  Page: <title> — <url> (observation 1).
+  ```
+
+  这是任务的第一条推送：它紧跟在读完页面之后，还没有任何动作跑过，所以没有 `last action`——等有动作跑过才会带上 `, last action: <action>`；`<title> — ` 这一段只在页面有标题时出现。还没读过任何页面时，第二行是 `It has not read a page yet.`。这条推送**只是通知**：不要回复它、不要拿它重新派活、也不要把它当成结论——结论是下面那条。
+- **结果自动回来**：子 agent 干完会把结论发回来；它空闲下来时 DSH 还会给主 agent 发一条"Background subagent … finished"的通知并唤醒它，既不用轮询也不用阻塞。`browser_task` 的回执会把这点说清楚——继续干别的或结束本轮，不要在 shell 里 `sleep`；组合里有 agent team 时还会注明它的 `wait_agent` / `list_agents` 看不到这个子 agent。
+- **随时查状态**：`browser_task_status` 从宿主自己的 `subagent/start` / `subagent/end` 事件和 agent 注册表读出子 agent 的状态。`wait: true` 等的是通知所依据的同一次结算，而不是靠 `sleep` 去猜；用户发话或子 agent 给主 agent 发消息时会提前返回——留到"离了结果就没法往下走"的那一步再用。
 - **重启也找得回**：子 agent 用标签 `browser-task` 记在父会话的目录里，DSH 重启或 resume 后，下一次 `browser_task` / `send_message` 会找回同一个子 agent。
 
 provider 不支持 continuable（或配置 `delegateMode: one-shot`）时，退回**一次性委派**：每个任务一个子 agent，`browser_task` 等它回报后再返回。
@@ -112,7 +120,7 @@ Without a target: WAIT
 不把截图喂给模型（截图只给人看），每步只送结构化文本：可见文本 + 元素表 + 本轮可选操作。
 
 ### 3b. 主 agent 不读页面
-表格、索引、拒绝与重读都发生在子 agent 的上下文里，对话只收到一段结论。页面有多复杂，主 agent 的上下文就还是那么长；它也**没有**能点错页面的工具。
+表格、索引、拒绝与重读都发生在子 agent 的上下文里，对话只收到几行进度和一段结论。页面有多复杂，主 agent 的上下文就还是那么长；它也**没有**能点错页面的工具。
 
 ### 4. 模型不用猜能做什么
 表里直接列出**这一帧允许的操作与目标**，包括下拉框的每一个可选项（`6:1 → Stay category → Design`）。不支持的操作、被遮挡的控件、被禁用的字段根本不会出现在表里。
@@ -328,7 +336,7 @@ Status   : ready
 
 `jev.decider` 与 `jev.typesafe.apiKey` 都是 `.volatile()` 的：改完当场生效（下次 `browser_goal` 或带 `intent` 的 `browser_act` 就用新值）。key 以 `role('secret')` 提交，永远不出现在任何表单响应里：输入框每次都是空的，留空表示不动已存的 key，写入成功会显示「已写入」。想**删掉**已存的 key，就从 profile patch 里删掉那一行。
 
-**其余开关都在 profile patch 里改**（改完 DSH 会重挂插件，和以前一样）：`mode`、`cdpEndpoint`、`executablePath`、`userDataDir`、`headless`、`allowScreenshots`、`requestTimeoutMs`、`delegate`、`delegateMode`、`subagentProvider`、`maxDepth`、`projectPath`、`pythonPath`、`reserveBrowserUseSlot`、`jev.enabled`、`jev.typesafe.fallbackURL`、`jev.typesafe.apiKeyEnv`、`jev.source`、`jev.textModel.baseURL`、`jev.textModel.model`、`jev.textModel.reasoning`、`jev.textModel.headers`、`jev.textModel.apiKey` / `.apiKeyEnv`。它们决定**有哪些工具**、跑哪个解释器、占不占组合槽位，或者描述一个本不该让人操心的文本模型——做成表单字段等于承诺一个做不到的"立即生效"。`jev.typesafe.apiKeyEnv` 仍留给"不想把 key 写进 profile 文件、只想**指名**一份已存凭据（Models 页存的 DSH 凭据，或环境变量名）"的 patch；往这一项里直接粘密钥会被拒绝，并给出该写哪儿的提示。
+**其余开关都在 profile patch 里改**（改完 DSH 会重挂插件，和以前一样）：`mode`、`cdpEndpoint`、`executablePath`、`userDataDir`、`headless`、`allowScreenshots`、`requestTimeoutMs`、`delegate`、`delegateMode`、`subagentProvider`、`maxDepth`、`projectPath`、`pythonPath`、`reserveBrowserUseSlot`、`progress`、`progressIntervalMs`、`jev.enabled`、`jev.typesafe.fallbackURL`、`jev.typesafe.apiKeyEnv`、`jev.source`、`jev.textModel.baseURL`、`jev.textModel.model`、`jev.textModel.reasoning`、`jev.textModel.headers`、`jev.textModel.apiKey` / `.apiKeyEnv`。它们决定**有哪些工具**、跑哪个解释器、占不占组合槽位、子 agent 干活时话多话少，或者描述一个本不该让人操心的文本模型——做成表单字段等于承诺一个做不到的"立即生效"。`jev.typesafe.apiKeyEnv` 仍留给"不想把 key 写进 profile 文件、只想**指名**一份已存凭据（Models 页存的 DSH 凭据，或环境变量名）"的 patch；往这一项里直接粘密钥会被拒绝，并给出该写哪儿的提示。
 
 改完一次之后，下面的 YAML 写法仍然有效（也是 `projectPath` 这类字段唯一的入口）：
 
@@ -411,6 +419,8 @@ Status   : ready
 | `delegateMode` | `persistent` | `persistent`：每个对话一个常驻浏览器子 agent，后续任务都发给它；`one-shot`：每个任务一个子 agent、等回报再返回。provider 不支持 continuable 时自动用 `one-shot` |
 | `subagentProvider` | `spawn` | `ctx.subagents` 里的 provider 名；需要它能组合**进程内**子 agent，否则退回直接模式 |
 | `maxDepth` | `0` | 子 agent 的委派深度上限；`0` 表示用 provider 自己的递归预算 |
+| `progress` | `true` | 子 agent 干活期间把简短的进度消息推进本对话；`false` 就完全安静。没有表单字段——设置页没有这个开关 |
+| `progressIntervalMs` | `30000` | 两条进度消息之间最短的间隔，使用时下限 `1000` ms。每次推送都可能开启一轮父对话，所以**间隔越小越实时，也越费 token**。没有表单字段 |
 
 ✎ = 出现在**侧边栏「插件」→ `@ricardochen1996/dsh-browser-use`**（包页面或行标题里的「配置」）的表单里，改完立即生效（在下次用到该值时）；没有 ✎ 的字段只在 profile patch 里配。表单是双语的：标签、说明和拒绝提示都来自 shell 自己的 locale 服务，所以界面是中文就读**中文**，界面是英文就读 **English**。
 
@@ -480,6 +490,7 @@ DSH host (Node)                                        ← 本仓库 lib/
                   │     └─ 子 agent 的 scope：browser_* 只注册在这里
                   │        子 agent 只放开 send_message，其它全局工具被屏蔽
                   ── ctx.on(subagent/start, subagent/end, agent/inbox/inserted)   子 agent 的状态，供 browser_task_status 读
+                  ── 以子 agent 名义把进度 agent-message 推进父对话（自己记录每一步，合并节流）
                   ── ctx.systemPrompt.section(子 agent 的使用规则)
                   ── ctx.webServer.register('/browser-use')     面板路由
                   └─ 每 Session 一个 sidecar 进程，操作串行（委派之间复用）

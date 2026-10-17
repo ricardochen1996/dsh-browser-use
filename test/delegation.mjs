@@ -46,6 +46,8 @@ function fakeHost({ capabilities = { toolFilter: true }, late = false, continuab
   const agents = new Map()
   const warnings = []
   const delegations = []
+  /** Every message a child sent to its parent, as the host sees it: what the progress feed pushes. */
+  const deliveries = []
   /** Continuable children, in creation order, and each parent's durable catalog. */
   const children = []
   const catalogs = new Map()
@@ -204,6 +206,19 @@ function fakeHost({ capabilities = { toolFilter: true }, late = false, continuab
           },
           sendMessage: async (sender, targetId, content, options) => {
             options.signal.throwIfAborted()
+            // A resident child writing to its parent. This is the path the progress feed pushes
+            // through, and the one DSH only accepts from the exact live child of that parent.
+            const self = children.find(item => item.id === sender.id)
+            if (self !== undefined) {
+              if (agents.get(sender.id) !== sender) throw failure(`"${sender.id}" is not the live agent`, 'UNAUTHORIZED')
+              if (self.parentId !== targetId) throw failure(`"${targetId}" is not the parent of "${sender.id}"`, 'UNAUTHORIZED')
+              const text = textOf(content)
+              deliveries.push({ from: sender.id, to: targetId, content, text })
+              // DSH prefixes the relayed text for the parent; the content the child sent is what a
+              // test can assert on, so the delivery keeps that text as it stands.
+              relay(self, text)
+              return `m-${self.id}-to-parent-${deliveries.length}`
+            }
             const record = children.find(item => item.id === targetId && item.parentId === sender.id)
             if (record === undefined) throw failure(`"${targetId}" is not a direct child`, 'UNAUTHORIZED')
             if (record.gone) throw failure(`subagent "${targetId}" is unavailable`, 'NOT_RESUMABLE')
@@ -265,7 +280,7 @@ function fakeHost({ capabilities = { toolFilter: true }, late = false, continuab
   const own = () => [...globals.values()].filter(item => item.external !== true).map(item => item.name).sort().join(',')
   return {
     ctx, conversation, globals, scopes, restrictions, sections, delegations, children, interrupted, warnings,
-    dispose, provide, unprovide, settle, seedChild, subagents, own, userWrites, relay,
+    dispose, provide, unprovide, settle, seedChild, subagents, own, userWrites, relay, deliveries,
   }
 }
 
@@ -286,7 +301,11 @@ const textOf = content => content.map(block => block.text).join('\n')
 async function persistentChecks(plugin) {
   const profile = await mkdtemp(join(tmpdir(), 'browser-use-delegation-'))
   const host = fakeHost()
-  plugin.apply(host.ctx, { projectPath: ENGINE, userDataDir: join(profile, 'browser'), headless: true })
+  // Progress is on, as a profile gets it by default. Its window is longer than this test on purpose:
+  // a coalesced report must not land inside one of the waits below, which assert what ended them.
+  plugin.apply(host.ctx, {
+    projectPath: ENGINE, userDataDir: join(profile, 'browser'), headless: true, progressIntervalMs: 600000,
+  })
 
   const ask = (args, signal = new AbortController().signal) =>
     host.globals.get('browser_task').execute(args, { agent: host.conversation, signal })
@@ -352,10 +371,26 @@ async function persistentChecks(plugin) {
     const opened = await childCall(record, 'browser_open', { url: FIXTURE })
     const target = opened.text.match(/\[(\d+)\][^\n]*searchbox Destination/u)?.[1]
     check(target !== undefined, 'the child reads an indexed action space from the real browser')
+
+    // The step the child just took reaches its parent without anyone asking for it.
+    phase('a step pushes progress into the owning conversation')
+    await wait(20)
+    const firstProgress = host.deliveries[0]
+    check(host.deliveries.length === 1 && firstProgress.from === record.id && firstProgress.to === host.conversation.id
+      && firstProgress.content[0].type === 'text',
+    'a browser step sends one progress message from the child to the conversation that owns it')
+    check(new RegExp(
+      `^Browser subagent "${record.id}" progress — \\d+s into the task \\(status only; no reply needed\\)\\.\n`
+      + 'Page: .+ — \\S+ \\(observation 1\\)\\.$',
+      'u',
+    ).test(firstProgress.text), 'the push has the two-line status shape: duration, page, and observation')
+
     const typed = await childCall(record, 'browser_act', { observation: opened.observation, operation: 'TYPE_TEXT', target, text: 'Lisbon' })
     check(typed.text.includes('· "Lisbon"'), 'the child acts on the page')
     check((await status()).text.includes('fixture.html') && (await status()).text.includes('last action'),
       'browser_task_status shows the page the subagent\'s browser is on')
+    await wait(20)
+    check(host.deliveries.length === 1, 'a step inside the progress window is coalesced instead of pushing again')
 
     // The child finishes its turn and settles; its handle is disposed, its conversation is not.
     phase('a wait ends when the subagent finishes')
@@ -390,6 +425,10 @@ async function persistentChecks(plugin) {
     phase('resumed child reads the page again')
     const page = await childCall(record, 'browser_page', {})
     check(page.text.includes('· "Lisbon"'), 'the resumed child drives the same browser, on the page it left')
+    await wait(20)
+    check(host.deliveries.length === 2
+      && host.deliveries[1].text.includes(`(observation ${page.observation}, last action: TYPE_TEXT`),
+    'the step after the window reports the page, the observation, and the action it took there')
 
     phase('a wait that times out, one the user ends, one the subagent ends by writing, one cancelled')
     const timedOut = (await status({ wait: true, timeout_ms: 1 })).text
@@ -547,11 +586,229 @@ async function oneShotChecks(plugin) {
   await configured.dispose()
 }
 
+/**
+ * The live progress stream: what the conversation hears while the browser subagent works, with no
+ * call of its own.
+ *
+ * The first half drives real browser steps and reads what the conversation actually received; the
+ * second half drives the feed directly, because the cases that decide the design are the ones a
+ * live page never reaches — a profile that turned progress off, a subagent that is gone, a step
+ * that changed nothing, a delivery that is refused. A window is floored at a second, so the checks
+ * that wait one out are the slowest part of this file.
+ */
+async function progressChecks(plugin) {
+  const { PROGRESS_DEFAULT_MS, PROGRESS_MIN_MS, ProgressFeed } = await import(
+    pathToFileURL(join(PACKAGE_ROOT, 'lib', 'progress.js')).href
+  )
+  const config = await import(pathToFileURL(join(PACKAGE_ROOT, 'lib', 'config.js')).href)
+  const { Sessions } = await import(pathToFileURL(join(PACKAGE_ROOT, 'lib', 'sessions.js')).href)
+  const profile = await mkdtemp(join(tmpdir(), 'browser-use-progress-'))
+  const host = fakeHost()
+  // The shortest window a profile can ask for: the coalescing checks below cost a second, not a minute.
+  plugin.apply(host.ctx, {
+    projectPath: ENGINE, userDataDir: join(profile, 'browser'), headless: true, progressIntervalMs: 0,
+  })
+  const ask = (args, signal = new AbortController().signal) =>
+    host.globals.get('browser_task').execute(args, { agent: host.conversation, signal })
+  const childCall = (record, name, args) =>
+    record.tools().get(name).execute(args ?? {}, { agent: record.child, signal: new AbortController().signal })
+  const WINDOW = PROGRESS_MIN_MS + 350
+
+  /** A feed with no browser behind it: the drop rules, and the failure path, on a view a test owns. */
+  const fixture = (options = {}) => {
+    const pushes = []
+    const warnings = []
+    const agents = new Map([['child-1', { id: 'child-1' }]])
+    const view = { url: 'https://example.test/', title: 'Example', observation: 1, lastAction: 'CLICK on Go' }
+    const ctx = {
+      get: name => (name === 'agents'
+        ? { get: id => agents.get(id) }
+        : name === 'subagents'
+          ? {
+              sendMessage: options.sendMessage ?? (async (child, targetId, content, settings) => {
+                settings.signal.throwIfAborted()
+                pushes.push({ from: child.id, to: targetId, text: textOf(content) })
+              }),
+            }
+          : undefined),
+      logger: { warn: message => warnings.push(String(message)) },
+    }
+    const feed = new ProgressFeed(ctx, {
+      config: options.config ?? { progress: true, progressIntervalMs: 0 },
+      sessions: { viewOf: () => view },
+      childOf: options.childOf ?? (() => 'child-1'),
+    })
+    return { feed, view, pushes, warnings, agents, owner: { id: 'session-owner' } }
+  }
+
+  try {
+    check(PROGRESS_MIN_MS === 1000 && PROGRESS_DEFAULT_MS === 30000,
+      'the feed publishes the documented floor and default interval')
+    check(config.DEFAULTS.progress === true && config.DEFAULTS.progressIntervalMs === 30000,
+      'the documented defaults are progress on, one message per 30s')
+    check(config.resolveConfig({ progress: false }).progress === false, 'a profile patch can turn progress off')
+    let refused
+    try { config.resolveConfig({ progressIntervalMs: -1 }) } catch (error) { refused = String(error.message) }
+    check(refused === 'dsh-browser-use: progressIntervalMs must be zero or a positive number',
+      'a negative interval is refused with the documented message')
+    let refusedSwitch
+    try { config.resolveConfig({ progress: 1 }) } catch (error) { refusedSwitch = String(error.message) }
+    check(refusedSwitch === 'dsh-browser-use: progress must be true or false',
+      'a truthy non-boolean progress is refused, so the stream can never turn itself off in silence')
+
+    phase('progress: a step pushes, a burst waits for the window')
+    await ask({ instruction: 'Open the page and type Lisbon into Destination.', url: FIXTURE })
+    const record = host.children[0]
+    const opened = await childCall(record, 'browser_open', { url: FIXTURE })
+    await wait(20)
+    check(host.deliveries.length === 1 && host.deliveries[0].text.includes('(observation 1)'),
+      'the first browser step pushes a page report at once')
+    const target = opened.text.match(/\[(\d+)\][^\n]*searchbox Destination/u)?.[1]
+    const typed = await childCall(record, 'browser_act', { observation: opened.observation, operation: 'TYPE_TEXT', target, text: 'Lisbon' })
+    await wait(20)
+    check(host.deliveries.length === 1, 'both steps of one action, inside the window, push nothing')
+    await wait(WINDOW)
+    check(host.deliveries.length === 2, 'the window ends in exactly one coalesced report')
+    check(host.deliveries[1].text.includes(`(observation ${typed.observation}, last action: TYPE_TEXT`)
+      && host.deliveries[1].text.includes('Page: '),
+    'the coalesced report names the page, the observation, and the action that was taken')
+
+    phase('progress: a step in a later window pushes again')
+    await wait(WINDOW)
+    const again = await childCall(record, 'browser_page', {})
+    await wait(20)
+    check(host.deliveries.length === 3 && host.deliveries[2].text.includes(`(observation ${again.observation}`),
+      'a step after the window produces the next push')
+
+    phase('progress: a refused delivery cannot break a browser step')
+    await wait(WINDOW)
+    const relay = host.subagents.sendMessage
+    host.subagents.sendMessage = async () => { throw new Error('relay refused') }
+    const escapes = []
+    const trap = reason => escapes.push(reason)
+    process.on('unhandledRejection', trap)
+    const still = await childCall(record, 'browser_page', {})
+    await wait(50)
+    process.off('unhandledRejection', trap)
+    host.subagents.sendMessage = relay
+    check(still.text.includes(`Observation ${still.observation}.`),
+      'the browser step still returns its page table when its progress push is refused')
+    check(escapes.length === 0, 'a refused progress push becomes no unhandled rejection')
+    check(host.warnings.some(message => message.includes('was not delivered')),
+      'the refusal is reported through the logger, not thrown at the tool')
+
+    phase('progress: a settled subagent cannot report late')
+    await wait(WINDOW)
+    await childCall(record, 'browser_page', {}) // a fresh push opens a window
+    await wait(20)
+    const settledCount = host.deliveries.length
+    await childCall(record, 'browser_page', {}) // inside that window: it would report when the window ends
+    await wait(20)
+    check(host.deliveries.length === settledCount, 'a step inside the window pushes nothing of its own')
+    host.settle(record)
+    await wait(WINDOW)
+    check(host.deliveries.length === settledCount,
+      'subagent/end cancels the report the child had pending, so nothing arrives after it')
+
+    phase('progress: the drop rules, without a browser')
+    // Each fixture is armed now and judged after one window: what never pushed had no timer either.
+    const off = fixture({ config: { progress: false, progressIntervalMs: 0 } })
+    off.feed.step(off.owner)
+    const absent = fixture({ childOf: () => undefined })
+    absent.feed.step(absent.owner)
+    const dead = fixture({})
+    dead.agents.delete('child-1')
+    dead.feed.step(dead.owner)
+    const same = fixture({})
+    same.feed.step(same.owner)
+    same.feed.step(same.owner)
+    const vanished = fixture({})
+    vanished.feed.step(vanished.owner)
+    vanished.view.observation = 2
+    vanished.feed.step(vanished.owner)
+    vanished.agents.delete('child-1')
+    const ended = fixture({})
+    ended.feed.step(ended.owner)
+    ended.view.observation = 2
+    ended.feed.step(ended.owner)
+    ended.feed.end('child-1')
+    const released = fixture({})
+    released.feed.step(released.owner)
+    released.view.observation = 2
+    released.feed.step(released.owner)
+    released.feed.release()
+    const after = fixture({})
+    after.feed.release()
+    after.feed.step(after.owner)
+    const refusedPush = fixture({ sendMessage: async () => { throw new Error('relay refused') } })
+    const refusals = []
+    const refusalTrap = reason => refusals.push(reason)
+    process.on('unhandledRejection', refusalTrap)
+    refusedPush.feed.step(refusedPush.owner)
+    await wait(50)
+    process.off('unhandledRejection', refusalTrap)
+
+    // A window longer than a timer can carry: setTimeout clamps such a delay to 1 ms, which would
+    // fire the window at once and let a push and its flush land back to back, both inside one window.
+    phase('progress: a window longer than a timer can carry')
+    const overflow = []
+    const capture = warning => overflow.push(warning)
+    process.on('warning', capture)
+    const huge = fixture({ config: { progress: true, progressIntervalMs: 3_000_000_000 } })
+    huge.feed.step(huge.owner)
+    huge.view.observation = 2
+    huge.feed.step(huge.owner)
+    await wait(60)
+    process.off('warning', capture)
+    check(huge.pushes.length === 1 && !overflow.some(warning => warning.name === 'TimeoutOverflowWarning'),
+      'a window above the timer range still coalesces instead of pushing its flush 1 ms later')
+    // The clamped window is weeks long: nothing waits it out, and nothing holds the loop open for it.
+    huge.feed.end('child-1')
+
+    // The listener guard has two strangers to contain: the listener, and the logger that reports it.
+    phase('progress: a step listener and the logger both throw')
+    const entry = { owner: { id: 'session-owner' }, observation: 0, fingerprints: new Map(), last: null, lastAction: '', updatedAt: 0 }
+    const brittle = new Sessions({
+      get: () => undefined,
+      logger: { warn: () => { throw new Error('logger exploded') } },
+    }, {})
+    brittle.onStep(() => { throw new Error('listener exploded') })
+    let escaped = ''
+    try {
+      brittle.observed(entry, { fingerprint: 'fp-1' })
+      brittle.noteAction(entry, 'CLICK on Go')
+    } catch (error) { escaped = String(error?.message ?? error) }
+    check(escaped === '' && entry.observation === 1 && entry.lastAction === 'CLICK on Go',
+      'a throwing listener cannot break the browser tool even when the logger fails with it')
+
+    await wait(WINDOW)
+
+    check(off.pushes.length === 0, 'progress: false never pushes')
+    check(absent.pushes.length === 0, 'a conversation with no browser child never pushes')
+    check(dead.pushes.length === 0, 'a child that is not live never pushes')
+    check(same.pushes.length === 1, 'a step that changed nothing pushes nothing')
+    check(vanished.pushes.length === 1,
+      'a pending report is dropped when the child is gone by the time the window ends')
+    check(ended.pushes.length === 1, 'end() cancels the report a child had pending')
+    check(released.pushes.length === 1, 'release() cancels the report a child had pending')
+    check(after.pushes.length === 0, 'a released feed pushes nothing, not even from a later step')
+    check(refusals.length === 0 && refusedPush.pushes.length === 0
+      && refusedPush.warnings.some(message => message.includes('was not delivered')),
+    'a refused push out of step() is logged, and nothing escapes as an unhandled rejection')
+  } finally {
+    // Unloading the plugin releases the feed: a report it still had pending must not outlive it.
+    await host.dispose()
+    await wait(1500)
+    await rm(profile, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
 async function main() {
   const plugin = await import(pathToFileURL(join(PACKAGE_ROOT, 'lib', 'index.js')).href)
   await persistentChecks(plugin)
   await restartChecks(plugin)
   await oneShotChecks(plugin)
+  await progressChecks(plugin)
 
   // The provider composes an in-process child because it can restrict the child's tools; without
   // that capability the plugin does not pretend to delegate.
