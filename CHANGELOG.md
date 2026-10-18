@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 Versions before 0.6.2 were reconstructed from this repository's git history (there was no changelog before 0.6.2): each entry names the commits it was derived from, and every release date is the date of its tagged commit. 0.6.2 is the first release written down as it was made.
 
+## [0.6.3] - 2026-10-18
+
+### Added
+
+- `CHANGELOG.zh-CN.md`: the changelog in Chinese, every release from 0.1.0 to 0.6.3, translated section by section against the English file and shipped in the npm package beside the two READMEs.
+- The GitHub Release body is now bilingual: this version's English section, then the Chinese one under a `**中文**` heading. The plugin market shows the release body as a plugin's update notes, so the notes it shows for this package are readable in both languages.
+
+### Changed
+
+- `release.yml` builds the release body from the two changelogs instead of GitHub's generated notes, which list pull requests only and left every body as one compare line (the first step of this, `34126ad`, used the English section alone); a version with no changelog section still falls back to the generated notes.
+- `bin/check-package.mjs` requires `CHANGELOG.zh-CN.md` in the published tarball, and both READMEs' release steps now say to write the entry in both files.
+
+_Commits: `34126ad` (release body from the changelog), `c60b6d4` (Chinese changelog, bilingual body), this release commit._
+
 ## [0.6.2] - 2026-10-17
 
 ### Added

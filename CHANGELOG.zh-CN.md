@@ -6,6 +6,20 @@
 
 0.6.2 之前的版本是从本仓库的 git 历史重建出来的（0.6.2 之前没有版本说明）：每条记录都写明它取自哪些 commit，每个发布日期就是它那个打了标签的 commit 的日期。0.6.2 是第一个边做边写下来的版本。
 
+## [0.6.3] - 2026-10-18
+
+### 新增
+
+- `CHANGELOG.zh-CN.md`：中文版 changelog，覆盖 0.1.0 到 0.6.3 的每个版本，逐段对照英文版翻译，并随 npm 包与两个 README 一起发布。
+- GitHub Release 正文改为双语：先是本版本的英文段落，再是 `**中文**` 标题下的中文段落。插件市场把 Release 正文当作插件的「版本说明」展示，所以本包在市场里的说明中英文都能读。
+
+### 变更
+
+- `release.yml` 改为从两份 changelog 生成 Release 正文，不再用 GitHub 自动生成的说明（它只列 PR，而本仓库直接从 main 发版、没有 PR，所以正文一直只有一行 compare 链接；`34126ad` 是这条修复的第一步，只用了英文段）；某版本没写 changelog 段落时仍退回自动说明。
+- `bin/check-package.mjs` 要求发布的 tarball 里包含 `CHANGELOG.zh-CN.md`；两个 README 的发版步骤都改成要在两份 changelog 里各写一条。
+
+_Commits: `34126ad`（用 changelog 当 Release 正文）、`c60b6d4`（中文 changelog、双语正文）、本次发版提交。_
+
 ## [0.6.2] - 2026-10-17
 
 ### 新增
