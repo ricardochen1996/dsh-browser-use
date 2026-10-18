@@ -127,14 +127,35 @@ jobs:
           TARBALL: ${{ steps.npm.outputs.tarball }}
         shell: bash
         run: |
+          # The body is this version's CHANGELOG section. GitHub's generated notes list pull
+          # requests only, and this repository releases from main without them, so a generated body
+          # was one compare line -- which is also what the plugin market shows as the update notes.
+          version="${GITHUB_REF_NAME#v}"
+          notes="$RUNNER_TEMP/release-notes.md"
+          awk -v heading="## [$version]" '
+            index($0, heading) == 1 { section = 1; next }
+            section && /^## \[/ { exit }
+            section && /^_Commits:/ { next }
+            section { print }
+          ' CHANGELOG.md | sed '/./,$!d' > "$notes"
           status=$(curl --silent --show-error --max-time 30 \
             --header "Authorization: Bearer $GH_TOKEN" \
             --header "Accept: application/vnd.github+json" \
             --output "$RUNNER_TEMP/github-release.json" --write-out '%{http_code}' \
             "$GITHUB_API_URL/repos/$GH_REPO/releases/tags/$GITHUB_REF_NAME")
           case "$status" in
-            200) gh release upload "$GITHUB_REF_NAME" "$TARBALL" --clobber ;;
-            404) gh release create "$GITHUB_REF_NAME" "$TARBALL" \
-                   --verify-tag --generate-notes --title "$GITHUB_REF_NAME" ;;
+            200)
+              gh release upload "$GITHUB_REF_NAME" "$TARBALL" --clobber
+              if [ -s "$notes" ]; then gh release edit "$GITHUB_REF_NAME" --notes-file "$notes"; fi
+              ;;
+            404)
+              if [ -s "$notes" ]; then
+                gh release create "$GITHUB_REF_NAME" "$TARBALL" \
+                  --verify-tag --title "$GITHUB_REF_NAME" --notes-file "$notes"
+              else
+                gh release create "$GITHUB_REF_NAME" "$TARBALL" \
+                  --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
+              fi
+              ;;
             *) echo "GitHub release lookup failed: HTTP $status" >&2; exit 1 ;;
           esac
