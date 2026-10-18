@@ -6,7 +6,7 @@
 
 0.6.2 之前的版本是从本仓库的 git 历史重建出来的（0.6.2 之前没有版本说明）：每条记录都写明它取自哪些 commit，每个发布日期就是它那个打了标签的 commit 的日期。0.6.2 是第一个边做边写下来的版本。
 
-## [Unreleased]
+## [0.7.0] - 2026-10-18
 
 ### 新增
 
@@ -22,6 +22,8 @@
 ### 修复
 
 - profile 里导出了 `BH_RUNTIME_DIR`（或 `BH_TMP_DIR`）却没带引擎自己的 `…_SHARED=1` 时，不再把所有 Session 的 daemon 压成同一个名字。插件本来就会在这个目录里为每个 Session 起一个 sidecar，所以现在由它替它们标上"目录是共享的"（`lib/sidecar.js` 的 `inheritedEnvironment`）；没有这一步时，第二个 Session 会找到第一个 Session 的 daemon，任何一方关闭都会把对方正在驱动的 daemon 停掉（`test/plugin.mjs` 另有 5 项检查）。运营者显式写的 `…_SHARED=0` 会被覆盖，这是有意的：让这个目录变成"共享"的调用方就是插件；而旧版本遗留在裸 `bu` 名下的 daemon 只是不再被寻址。
+
+_Commits: `4cd62e1`（attach 共享、sidecar 环境修复及它们的测试）、本次发版提交。_
 
 ## [0.6.3] - 2026-10-18
 

@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 Versions before 0.6.2 were reconstructed from this repository's git history (there was no changelog before 0.6.2): each entry names the commits it was derived from, and every release date is the date of its tagged commit. 0.6.2 is the first release written down as it was made.
 
-## [Unreleased]
+## [0.7.0] - 2026-10-18
 
 ### Added
 
@@ -22,6 +22,8 @@ Versions before 0.6.2 were reconstructed from this repository's git history (the
 ### Fixed
 
 - A profile that exports `BH_RUNTIME_DIR` (or `BH_TMP_DIR`) without the engine's own `…_SHARED=1` no longer collapses every Session's daemon into one name. The plugin starts one sidecar per Session in that directory, so it now marks the directory shared for them (`lib/sidecar.js` `inheritedEnvironment`); without that, the second Session found the first Session's daemon and either one closing stopped the daemon the other was driving (5 offline checks in `test/plugin.mjs`). An explicit `…_SHARED=0` is overridden on purpose: the plugin is the caller that makes the directory shared, and a daemon an older version left at the bare `bu` name is simply no longer addressed.
+
+_Commits: `4cd62e1` (attach sharing, the sidecar-environment fix, and their tests), this release commit._
 
 ## [0.6.3] - 2026-10-18
 
