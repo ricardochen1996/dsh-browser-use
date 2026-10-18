@@ -537,7 +537,7 @@ uv run python bin/vendor_requirements.py update              # re-render vendor/
 uv run python bin/vendor_engine.py check ../jev-ultrafast    # what CI runs: the wheel holds exactly that revision
 ```
 
-[`release.yml`](https://github.com/ricardochen1996/dsh-browser-use/blob/main/.github/workflows/release.yml) runs on annotated `vX.Y.Z` tags whose commits are reachable from `main`. It reruns CI and publishes **the exact tarball CI tested**, then creates a GitHub Release with generated notes and the tarball attached. Only stable releases are supported; prerelease tags are refused rather than accidentally published as `latest`. Reruns skip npm publication only when the existing version's integrity matches; different bytes for the same version fail. New releases cannot move `latest` backwards.
+[`release.yml`](https://github.com/ricardochen1996/dsh-browser-use/blob/main/.github/workflows/release.yml) runs on annotated `vX.Y.Z` tags whose commits are reachable from `main`. It reruns CI and publishes **the exact tarball CI tested**, then creates a GitHub Release from this version's changelog section — `CHANGELOG.md` first, then the `CHANGELOG.zh-CN.md` one under a `**中文**` heading — with the tarball attached. Only stable releases are supported; prerelease tags are refused rather than accidentally published as `latest`. Reruns skip npm publication only when the existing version's integrity matches; different bytes for the same version fail. New releases cannot move `latest` backwards.
 
 ### One-time trusted publishing setup
 
@@ -565,7 +565,7 @@ In GitHub, create the **`npm` environment** and allow version-tag deployments. R
 
 ### Cut the next version
 
-Start from a clean, up-to-date `main` checkout, with the engine checkout the tests drive (`../jev-ultrafast`) at the revision `vendor/jev-ultrafast.json` names. Write the release's entry in [`CHANGELOG.md`](CHANGELOG.md) first — Added / Changed / Fixed, under a `## [x.y.z] - YYYY-MM-DD` heading — then keep all three version records together:
+Start from a clean, up-to-date `main` checkout, with the engine checkout the tests drive (`../jev-ultrafast`) at the revision `vendor/jev-ultrafast.json` names. Write the release's entry in [`CHANGELOG.md`](CHANGELOG.md) first — Added / Changed / Fixed, under a `## [x.y.z] - YYYY-MM-DD` heading — and the same section in [`CHANGELOG.zh-CN.md`](CHANGELOG.zh-CN.md), which is what the release body and the market show under `**中文**`. Then keep all three version records together:
 
 ```bash
 npm version 0.5.2 --no-git-tag-version
@@ -574,7 +574,7 @@ npm run check
 npm run test:e2e
 npm run release:pack
 
-git add CHANGELOG.md package.json pyproject.toml uv.lock vendor/requirements.txt
+git add CHANGELOG.md CHANGELOG.zh-CN.md package.json pyproject.toml uv.lock vendor/requirements.txt
 git commit -m "chore(release): v0.5.2"
 git tag -a v0.5.2 -m "v0.5.2"
 git push --atomic origin main v0.5.2

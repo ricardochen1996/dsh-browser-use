@@ -538,7 +538,7 @@ uv run python bin/vendor_requirements.py update              # 按新的 lock �
 uv run python bin/vendor_engine.py check ../jev-ultrafast    # 即 CI 跑的检查：wheel 恰好是那个 revision
 ```
 
-[`release.yml`](https://github.com/ricardochen1996/dsh-browser-use/blob/main/.github/workflows/release.yml) 由附注标签 `vX.Y.Z` 触发，标签 commit 必须已在 `main` 历史中。它重新运行 CI，将 **CI 已验证的同一个 tarball** 发布到 npm，然后创建带自动说明和 tarball 附件的 GitHub Release。当前只支持稳定版本；预发布标签会被拒绝，不会误写 `latest`。重跑时，只有已发布版本与本次包的完整性哈希相同才跳过 npm 发布；同版本不同内容直接失败，新版本也不能把 `latest` 回退。
+[`release.yml`](https://github.com/ricardochen1996/dsh-browser-use/blob/main/.github/workflows/release.yml) 由附注标签 `vX.Y.Z` 触发，标签 commit 必须已在 `main` 历史中。它重新运行 CI，将 **CI 已验证的同一个 tarball** 发布到 npm，然后用本版本的 changelog 段落创建 GitHub Release（先 `CHANGELOG.md` 的英文段，再 `**中文**` 标题下的 `CHANGELOG.zh-CN.md` 中文段），并附上 tarball。当前只支持稳定版本；预发布标签会被拒绝，不会误写 `latest`。重跑时，只有已发布版本与本次包的完整性哈希相同才跳过 npm 发布；同版本不同内容直接失败，新版本也不能把 `latest` 回退。
 
 ### 一次性配置 Trusted publishing
 
@@ -566,7 +566,7 @@ npx npm@11.20.0 trust github @ricardochen1996/dsh-browser-use --file release.yml
 
 ### 发布下一个版本
 
-从干净、已更新的 `main` checkout 开始，同级放好测试驱动的引擎 checkout（`../jev-ultrafast`，位于 `vendor/jev-ultrafast.json` 记录的 revision）。先在 [`CHANGELOG.md`](CHANGELOG.md) 里写好本版本的条目——`## [x.y.z] - YYYY-MM-DD` 标题下的 Added / Changed / Fixed——再一起更新三处版本记录：
+从干净、已更新的 `main` checkout 开始，同级放好测试驱动的引擎 checkout（`../jev-ultrafast`，位于 `vendor/jev-ultrafast.json` 记录的 revision）。先在 [`CHANGELOG.md`](CHANGELOG.md) 里写好本版本的条目——`## [x.y.z] - YYYY-MM-DD` 标题下的 Added / Changed / Fixed——再在 [`CHANGELOG.zh-CN.md`](CHANGELOG.zh-CN.md) 写同一段中文，Release 正文和插件市场的「版本说明」都会带上它；最后一起更新三处版本记录：
 
 ```bash
 npm version 0.5.2 --no-git-tag-version
@@ -575,7 +575,7 @@ npm run check
 npm run test:e2e
 npm run release:pack
 
-git add CHANGELOG.md package.json pyproject.toml uv.lock vendor/requirements.txt
+git add CHANGELOG.md CHANGELOG.zh-CN.md package.json pyproject.toml uv.lock vendor/requirements.txt
 git commit -m "chore(release): v0.5.2"
 git tag -a v0.5.2 -m "v0.5.2"
 git push --atomic origin main v0.5.2

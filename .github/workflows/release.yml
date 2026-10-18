@@ -127,17 +127,28 @@ jobs:
           TARBALL: ${{ steps.npm.outputs.tarball }}
         shell: bash
         run: |
-          # The body is this version's CHANGELOG section. GitHub's generated notes list pull
-          # requests only, and this repository releases from main without them, so a generated body
-          # was one compare line -- which is also what the plugin market shows as the update notes.
+          # The body is this version's changelog section, in both editions. GitHub's generated notes
+          # list pull requests only, and this repository releases from main without them, so a
+          # generated body was one compare line -- which is also what the plugin market shows as the
+          # plugin's update notes.
           version="${GITHUB_REF_NAME#v}"
+          english="$RUNNER_TEMP/release-notes.en.md"
+          chinese="$RUNNER_TEMP/release-notes.zh.md"
           notes="$RUNNER_TEMP/release-notes.md"
-          awk -v heading="## [$version]" '
-            index($0, heading) == 1 { section = 1; next }
-            section && /^## \[/ { exit }
-            section && /^_Commits:/ { next }
-            section { print }
-          ' CHANGELOG.md | sed '/./,$!d' > "$notes"
+          extract() {
+            awk -v heading="## [$version]" '
+              index($0, heading) == 1 { section = 1; next }
+              section && /^## \[/ { exit }
+              section && /^_(Commits|提交):/ { next }
+              section { print }
+            ' "$1" | sed '/./,$!d'
+          }
+          extract CHANGELOG.md > "$english"
+          if [ -f CHANGELOG.zh-CN.md ]; then extract CHANGELOG.zh-CN.md > "$chinese"; fi
+          {
+            cat "$english"
+            if [ -s "$chinese" ]; then printf '\n**中文**\n\n'; cat "$chinese"; fi
+          } > "$notes"
           status=$(curl --silent --show-error --max-time 30 \
             --header "Authorization: Bearer $GH_TOKEN" \
             --header "Accept: application/vnd.github+json" \
