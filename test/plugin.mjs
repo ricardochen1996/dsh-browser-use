@@ -351,8 +351,11 @@ async function attachExclusivity() {
   const first = make('session-attach-one')
   const second = make('session-attach-two')
   const ctx = { get: name => (name === 'agents' ? { get: id => agents.get(id) } : undefined) }
+  // Named explicitly: this test is about exclusivity, so it must not depend on which value the
+  // configuration defaults to.
   const sessions = new Sessions(ctx, {
     mode: 'attach',
+    attachSharing: 'exclusive',
     cdpEndpoint: 'ws://127.0.0.1:9/devtools/browser/none',
     pythonPath: '/nonexistent/python',
     requestTimeoutMs: 1000,
@@ -463,7 +466,13 @@ async function attachToYourChrome() {
   }
   const sessions = new Sessions(
     { get: name => (name === 'agents' ? { get: id => agents.get(id) } : undefined) },
-    { mode: 'attach', cdpEndpoint: '', pythonPath: '/nonexistent/python', requestTimeoutMs: 1000 },
+    {
+      mode: 'attach',
+      attachSharing: 'exclusive',
+      cdpEndpoint: '',
+      pythonPath: '/nonexistent/python',
+      requestTimeoutMs: 1000,
+    },
   )
   const attempt = owner => sessions.run(owner, undefined, async () => 'opened').then(() => '', error => String(error.message))
   await attempt(make('session-yours-one'))
