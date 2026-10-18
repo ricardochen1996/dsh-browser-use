@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 Versions before 0.6.2 were reconstructed from this repository's git history (there was no changelog before 0.6.2): each entry names the commits it was derived from, and every release date is the date of its tagged commit. 0.6.2 is the first release written down as it was made.
 
+## [Unreleased]
+
+### Added
+
+- `attachSharing`: `exclusive` (the default) or `shared`. In `mode: attach`, `shared` withdraws the one-Session reservation, so every live Session may drive the same external browser — each through its own daemon and its own tab — instead of the second one being refused. Sharing changes nothing about letting go: closing one Session's browser closes that Session's tab and stops its daemon, never the browser the others are still using (`test/test_bridge.py` pins that down). `shared` with `mode: launch` is refused when the profile loads, because a launched browser already belongs to one Session.
+- `Sessions.attachHolders`, the number of live Sessions holding the attached browser. A Session holds it from its first browser call — the reservation is taken before the engine is asked, which is what makes the refusal the second Session reads the one that matters — so this is "who holds it", not "who has a page open". `browser_doctor` prints it in attach mode (`attach sharing shared (2 live)`), so "why was my other Session refused the browser" is answered by the tool a person already calls first.
+- 9 offline checks for the answers sharing can give (`test/plugin.mjs`): sharing withdraws the refusal and reaches the engine, the default stays exclusive, asking to share outside attach mode is refused, and `browser_close` says what it does not close. The exclusivity checks now cover both halves of a reservation — the second Session is refused, and closing the holder frees it for the next one (`test/plugin.mjs` `attachExclusivity`).
+
+### Changed
+
+- The attach refusal now names the third way out — `attachSharing "shared"` — beside waiting for the holder to close its browser and giving each Session its own browser with `mode: "launch"`.
+- `browser_close` in `mode: attach` describes what it actually closes — this Session's tab and its daemon, never the attached browser — and its result says the same, instead of the launch-mode wording that promised the browser was stopped.
+
+### Fixed
+
+- A profile that exports `BH_RUNTIME_DIR` (or `BH_TMP_DIR`) without the engine's own `…_SHARED=1` no longer collapses every Session's daemon into one name. The plugin starts one sidecar per Session in that directory, so it now marks the directory shared for them (`lib/sidecar.js` `inheritedEnvironment`); without that, the second Session found the first Session's daemon and either one closing stopped the daemon the other was driving (5 offline checks in `test/plugin.mjs`). An explicit `…_SHARED=0` is overridden on purpose: the plugin is the caller that makes the directory shared, and a daemon an older version left at the bare `bu` name is simply no longer addressed.
+
 ## [0.6.3] - 2026-10-18
 
 ### Added

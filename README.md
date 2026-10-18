@@ -72,7 +72,7 @@ The browser tools live in the **delegated subagent's scope** (6 by default, with
 | `browser_screenshot` | Capture the viewport (image attachment). |
 | `browser_console` | Read console messages, page exceptions, failed requests and 4xx/5xx. |
 | `browser_goal` | Hand the whole goal to the browser policy in one run: it picks every operation and target itself (spends paid quota; `jev.decider` says whether Jev or the text model answers). |
-| `browser_close` | Close the tab, browser and daemon. |
+| `browser_close` | Close the tab and the daemon. In `mode: attach` the attached browser itself stays open, whether or not other Sessions are sharing it. |
 
 **Keep delegating without opening a pile of `browser_task`s.** The plugin uses DSH's native continuable subagent (`ctx.subagents.startContinuable` / `sendMessage`); each conversation has exactly one browser subagent:
 
@@ -132,6 +132,10 @@ The browser loop, freshness guards and executor all live in the Python engine, c
 Each DSH Session gets its own browser (its own profile, debug port and daemon) with serialized operations; everything closes when the Session ends. Parallel sessions never fight over a tab or leak state.
 
 The browser belongs to **the Session that started the task**, not to the subagent: the subagent may be released, restored, or even swapped with `fresh: true`, and the browser, logins and tabs stay. So consecutive `browser_task`s continue on the same page rather than reopening each time. An external browser adopted via `mode: attach` is **held by only one live Session at a time** — a second session is explicitly refused. Two Sessions fighting over one external browser is the only real data risk at this layer.
+
+When one browser is meant to be driven by several conversations at once — your everyday Chrome, say — set `attachSharing` to `shared`: the exclusivity check stops refusing the second Session, and every Session still gets its own daemon and its own tab. Closing one Session's browser closes that tab and stops that daemon; it **never closes the external browser**. The default stays `exclusive`, the "a second session is refused" behaviour above.
+
+One shared-browser detail is worth knowing: when a Session opens its first page, the engine tidies away the browser's unused **blank** tabs, and a Session that has not opened anything yet is exactly that. Only blank pages are closed, and the affected daemon opens a fresh tab on its next call — so the cost is at most one call that fails on a blank page, not a lost page.
 
 ### 7. It doesn't touch the browser you're using
 By default the plugin launches a dedicated Chrome instance. It never touches your personal Chrome profile, so there's no Chrome 144+ "allow remote debugging?" prompt and none of your logins get swept into automation. When you do want to use your own browser, switch explicitly to `mode: attach`:
@@ -336,7 +340,7 @@ The **text model is not a form field** either, on purpose: it is the main conver
 
 `jev.decider` and `jev.typesafe.apiKey` are `.volatile()`: a change takes effect on the spot (the next `browser_goal` or intent-bearing `browser_act` uses the new value). The key is submitted with `role('secret')`, so it never appears in any form response: the field starts blank every time, a blank one means "don't touch the stored key", and a write that lands answers `Saved`. To **remove** a key again, delete its line from the profile patch.
 
-**All other switches are changed in the profile patch** (after which DSH remounts the plugin, as before): `mode`, `cdpEndpoint`, `executablePath`, `userDataDir`, `headless`, `allowScreenshots`, `requestTimeoutMs`, `delegate`, `delegateMode`, `subagentProvider`, `maxDepth`, `projectPath`, `pythonPath`, `reserveBrowserUseSlot`, `progress`, `progressIntervalMs`, `jev.enabled`, `jev.typesafe.fallbackURL`, `jev.typesafe.apiKeyEnv`, `jev.source`, `jev.textModel.baseURL`, `jev.textModel.model`, `jev.textModel.reasoning`, `jev.textModel.headers`, `jev.textModel.apiKey` / `.apiKeyEnv`. They decide **which tools exist**, which interpreter runs, whether a composition slot is taken or how talkative the subagent is while it works — or describe a text model a person should not have to think about — making them form fields would promise an "immediate effect" that can't be delivered. `jev.typesafe.apiKeyEnv` stays available for a patch that would rather **name** a stored credential (a DSH credential from the Models page, or an environment variable) than keep the key in the profile file; naming the key there instead is refused, with the fix.
+**All other switches are changed in the profile patch** (after which DSH remounts the plugin, as before): `mode`, `attachSharing`, `cdpEndpoint`, `executablePath`, `userDataDir`, `headless`, `allowScreenshots`, `requestTimeoutMs`, `delegate`, `delegateMode`, `subagentProvider`, `maxDepth`, `projectPath`, `pythonPath`, `reserveBrowserUseSlot`, `progress`, `progressIntervalMs`, `jev.enabled`, `jev.typesafe.fallbackURL`, `jev.typesafe.apiKeyEnv`, `jev.source`, `jev.textModel.baseURL`, `jev.textModel.model`, `jev.textModel.reasoning`, `jev.textModel.headers`, `jev.textModel.apiKey` / `.apiKeyEnv`. They decide **which tools exist**, which interpreter runs, whether a composition slot is taken or how talkative the subagent is while it works — or describe a text model a person should not have to think about — making them form fields would promise an "immediate effect" that can't be delivered. `jev.typesafe.apiKeyEnv` stays available for a patch that would rather **name** a stored credential (a DSH credential from the Models page, or an environment variable) than keep the key in the profile file; naming the key there instead is refused, with the fix.
 
 After a first pass through the UI, the YAML form below still works (and is the only entry point for fields like `projectPath`):
 
@@ -401,6 +405,7 @@ In every mode, the endpoint and key used by `browser_goal` and `browser_act`'s `
 | `projectPath` | empty (the bundled engine, in this package's `.venv`, installed automatically) | an engine checkout to run instead; once set, only interpreters that import the engine from here are accepted, and the plugin installs nothing |
 | `pythonPath` | auto | pin an interpreter that already imports `jev_ultrafast`; once set, only it is tried, and the plugin installs nothing |
 | `mode` | `launch` | `launch` starts a browser; `attach` connects to a running one |
+| `attachSharing` | `exclusive` | who may drive the attached browser: `exclusive` keeps it for one live Session and refuses a second; `shared` lets every live Session drive it at once, each with its own daemon and its own tab, and closing one Session's browser closes only its tab. Not accepted with `launch`, where every Session already has its own browser |
 | `cdpEndpoint` | — | the DevTools address for `attach` (`http(s)://` or `ws(s)://`); blank auto-attaches to the Chrome you use with `chrome://inspect` remote debugging on |
 | `executablePath` | system Chrome | which browser to launch |
 | `userDataDir` | one per Session (`~/.jev-ultrafast/browser/<session>`) | dedicated profile directory |
@@ -462,7 +467,7 @@ Those upstream 63 lines only define **the slot, the name and ownership**; the co
 | Single-slot registration, released on unload | `ctx.get('browserUse')?.register('browser-use')`, disposer managed by the effect |
 | Stop tools first, then wait for own work, before releasing | effect cleanup order: tools → Session browser → registration slot |
 | The browser belongs to an exact live Agent/Session | every call verifies the initiator is still a live agent; resume/fork gets a new browser |
-| Attach browser exclusivity | held by one live Session at a time within this provider instance; a second is explicitly refused (2 more checks) |
+| Attach browser exclusivity | held by one live Session at a time within this provider instance; a second is explicitly refused, and closing the holder frees it for the next Session (3 more checks). A profile that wants the traffic can opt out with `attachSharing: shared`, and then each Session drives it through its own daemon and its own tab (9 more checks) |
 | Attach readiness is checked, not assumed | the endpoint is asked `GET /json/version` (a `ws://` address whether anything is listening), the browser you browse with is asked through the engine, and the doctor fails instead of reporting `ready` while the browser it was told to drive is absent (17 more checks) |
 | Cancellation is one channel before and after launch | request-level `AbortSignal`: in-flight requests settle immediately (kind `cancelled`), delegation winds down with `run.dispose()`; **operations already delivered to the browser are not rolled back** |
 | No reuse after a failed cleanup | a generation that failed to close is marked unusable: the next open uses a new process + new daemon name and writes the reason into the tool result |

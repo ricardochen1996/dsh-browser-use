@@ -134,6 +134,31 @@ def test_attach_without_an_endpoint_hands_discovery_to_browser_harness(monkeypat
     assert session.owned_browser is None  # a browser you started is never one this sidecar stops
 
 
+def test_closing_an_attached_browser_closes_the_tab_and_never_the_browser(monkeypatch):
+    """Letting Sessions share an external browser must not end with one of them stopping it.
+
+    Attach mode owns no browser process — sharing has no knob of its own down here, because attach
+    is the mode that can be shared — so whatever the Sessions share belongs to whoever started it.
+    Closing this Session stops its tab and its own daemon, and there is no process here that could
+    be terminated: the browser the other Sessions are still driving stays up.
+    """
+    monkeypatch.setenv("BU_CDP_WS", "ws://placeholder")  # restored (absent) when this test ends
+    ended = []
+    monkeypatch.setattr(bridge, "restart_daemon", lambda *arguments, **keywords: ended.append("daemon stopped"))
+    closed = []
+
+    class FakeBrowser:
+        def close(self):
+            closed.append("tab closed")
+
+    session = bridge.Session(open_browser=pytest.fail, launch=pytest.fail)
+    session._connect({"mode": "attach", "cdpEndpoint": "ws://127.0.0.1:9/devtools/browser/shared"})
+    assert session.owned_browser is None  # nothing here may terminate the shared browser
+    session.browser = FakeBrowser()
+    assert call(session, "shutdown") == {"bye": True}
+    assert closed == ["tab closed"] and ended == ["daemon stopped"]
+
+
 def test_attach_without_an_endpoint_says_what_is_missing_before_any_browser_exists(monkeypatch, tmp_path):
     monkeypatch.setattr(bridge.socket, "create_connection", lambda *arguments, **keywords: pytest.fail())
     discover = bridge.discover_local_browser

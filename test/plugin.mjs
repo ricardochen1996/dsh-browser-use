@@ -50,7 +50,9 @@ function fakeContext() {
   const disposers = []
   const listeners = new Map()
   const agent = {
-    id: 'session-plugin-check',
+    // One label per process, because the label names the browser-harness daemon: two copies of this
+    // suite running at once would otherwise claim the same daemon name and steal each other's socket.
+    id: `session-plugin-check-${process.pid}`,
     ctx: { effect: callback => { disposers.push(callback()); return () => {} } },
   }
   const ctx = {
@@ -363,7 +365,74 @@ async function attachExclusivity() {
   const secondFailure = await attempt(second)
   check(/attached by another live Session/u.test(secondFailure), 'a second Session is refused the attached browser')
   check(!/not usable/u.test(secondFailure), 'the refusal explains the reservation instead of the engine')
-  console.log(`PASS: 2 attach-exclusivity checks; no browser, no engine`)
+
+  // The other half of exclusivity: a Session that closes its browser lets the attached one go, so
+  // the next Session to ask gets it. Without this the reservation would outlive its holder.
+  await sessions.close(sessions.entry(first))
+  const afterClose = await attempt(second)
+  check(!/attached by another live Session/u.test(afterClose), 'closing the holder frees the attached browser for the next Session')
+  console.log(`PASS: 3 attach-exclusivity checks; no browser, no engine`)
+}
+
+/**
+ * Sharing is the profile's own choice, and the only thing that withdraws the refusal. Every live
+ * Session then drives the same external browser, each through its own daemon and its own tab, and
+ * the second Session reaches the engine instead of the reservation. Nothing here starts a browser:
+ * both Sessions fail on the missing engine, which is what proves the refusal is gone.
+ *
+ * The other half of sharing is that it stays a choice: the default is still exclusive, and asking
+ * for sharing outside attach mode is refused when the profile loads rather than ignored.
+ */
+async function attachSharing() {
+  const { Sessions } = await import(pathToFileURL(join(PACKAGE_ROOT, 'lib', 'sessions.js')).href)
+  const { resolveConfig } = await import(pathToFileURL(join(PACKAGE_ROOT, 'lib', 'config.js')).href)
+  const agents = new Map()
+  const make = id => {
+    const agent = { id, ctx: { effect: () => () => {} } }
+    agents.set(id, agent)
+    return agent
+  }
+  const ctx = { get: name => (name === 'agents' ? { get: id => agents.get(id) } : undefined) }
+  const sessions = new Sessions(ctx, {
+    mode: 'attach',
+    attachSharing: 'shared',
+    cdpEndpoint: 'ws://127.0.0.1:9/devtools/browser/none',
+    pythonPath: '/nonexistent/python',
+    requestTimeoutMs: 1000,
+  })
+  const attempt = agent => sessions.run(agent, undefined, async () => 'opened').then(() => '', error => String(error.message))
+  const firstFailure = await attempt(make('session-shared-one'))
+  const secondFailure = await attempt(make('session-shared-two'))
+  check(/not ready|not usable/u.test(firstFailure), 'the first Session takes the shared browser and reaches the engine check')
+  check(!/attached by another live Session/u.test(secondFailure), 'sharing withdraws the refusal for a second Session')
+  check(/not ready|not usable/u.test(secondFailure), 'the second Session reaches the engine check like the first')
+  check(sessions.attachHolders === 2, 'both Sessions are recorded as driving the attached browser')
+
+  let refused
+  try {
+    resolveConfig({ mode: 'launch', attachSharing: 'shared' })
+  } catch (error) {
+    refused = String(error.message)
+  }
+  check(/attachSharing "shared" needs mode "attach"/u.test(refused ?? ''),
+    'sharing outside attach mode is refused when the profile loads')
+  check(resolveConfig({ mode: 'attach' }).attachSharing === 'exclusive',
+    'attach mode stays exclusive unless the profile asks to share')
+  check(resolveConfig({ mode: 'attach', attachSharing: 'shared' }).attachSharing === 'shared',
+    'the profile that asks to share gets it')
+
+  // What the closing tool promises is the other half of sharing, and the tool has to say it: a
+  // Session that expects its browser to be gone would read a shared browser's survival as a failure.
+  const plugin = await import(pathToFileURL(join(PACKAGE_ROOT, 'lib', 'index.js')).href)
+  const attached = fakeContext()
+  plugin.apply(attached.ctx, { pythonPath: '/nonexistent/python', mode: 'attach', attachSharing: 'shared' })
+  check(/never closed/u.test(attached.tools.get('browser_close').description),
+    'attach mode says the browser it attached to is never closed')
+  const launched = fakeContext()
+  plugin.apply(launched.ctx, { pythonPath: '/nonexistent/python' })
+  check(/stop its browser/u.test(launched.tools.get('browser_close').description),
+    'launch mode still says the Session browser is stopped')
+  console.log(`PASS: 9 attach-sharing checks; no browser, no engine`)
 }
 
 /**
@@ -608,6 +677,26 @@ async function cancelInFlight() {
   console.log('PASS: 3 cancellation checks; real sidecar, no model calls')
 }
 
+/**
+ * One sidecar per Session shares the operator's runtime directory, and the engine keeps daemon names
+ * apart only when it is told the directory is shared. Without this the second Session would find the
+ * first Session's daemon, and either of them closing would stop the daemon the other is using.
+ */
+async function sidecarEnvironment() {
+  const { inheritedEnvironment } = await import(pathToFileURL(join(PACKAGE_ROOT, 'lib', 'sidecar.js')).href)
+  check(inheritedEnvironment({ PATH: '/usr/bin' }).BH_RUNTIME_DIR_SHARED === undefined,
+    'no runtime directory: nothing is marked shared')
+  check(inheritedEnvironment({ BH_RUNTIME_DIR: '/tmp/bu-runtime' }).BH_RUNTIME_DIR_SHARED === '1',
+    'a runtime directory shared by Sessions keeps each Session daemon named apart')
+  check(inheritedEnvironment({ BH_TMP_DIR: '/tmp/bu-tmp' }).BH_TMP_DIR_SHARED === '1',
+    'a tmp directory shared by Sessions keeps each Session daemon named apart')
+  check(inheritedEnvironment({ BH_RUNTIME_DIR: '/tmp/bu-runtime', BH_RUNTIME_DIR_SHARED: '1' })
+    .BH_RUNTIME_DIR_SHARED === '1', 'an operator who already said shared keeps that answer')
+  check(inheritedEnvironment({ TYPESAFE_API_KEY: 'secret', BH_RUNTIME_DIR: '/tmp/bu-runtime' })
+    .TYPESAFE_API_KEY === undefined, 'the engine’s own model variables are still dropped')
+  console.log('PASS: 5 sidecar-environment checks; no browser')
+}
+
 /** Control state reaches the model: without it, it cannot tell a ticked box from an unticked one. */
 async function elementStates() {
   const { pageText } = await import(pathToFileURL(join(PACKAGE_ROOT, 'lib', 'tools.js')).href)
@@ -630,7 +719,9 @@ await main()
 await missingEngine()
 await engineConfiguration()
 await attachExclusivity()
+await attachSharing()
 await attachToYourChrome()
 await attachPreflight()
 await settingsForm()
+await sidecarEnvironment()
 await cancelInFlight()

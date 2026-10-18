@@ -72,7 +72,7 @@ dsh-browser-use/
 | `browser_screenshot` | 截取可视区域（图片附件） |
 | `browser_console` | 读取控制台消息、页面异常、失败请求与 4xx/5xx |
 | `browser_goal` | 把整个目标交给浏览器策略一次跑完：每一步的操作与目标都由它自己选（会消耗付费额度；`jev.decider` 决定是 Jev 还是文本模型回答） |
-| `browser_close` | 关掉标签页、浏览器与 daemon |
+| `browser_close` | 关掉标签页与 daemon。`mode: attach` 下接来的那个浏览器本身不会被关——不管有没有别的会话在共享它 |
 
 **持续派活，不用开一堆 `browser_task`。** 插件用 DSH 原生的 continuable subagent（`ctx.subagents.startContinuable` / `sendMessage`），每个对话只有一个浏览器子 agent：
 
@@ -132,6 +132,10 @@ Without a target: WAIT
 每个 DSH Session 一个独立浏览器（独立 profile、独立调试端口、独立 daemon），操作串行；Session 结束自动全关。多个会话并行不会互抢标签页，也不会串状态。
 
 浏览器属于**发起任务的那个 Session**，不属于子 agent：子 agent 被释放、恢复甚至用 `fresh: true` 换掉，浏览器、登录态和标签页都留下。所以连续几个 `browser_task` 是接着同一个页面继续，而不是每次重开。`mode: attach` 接来的外部浏览器**一次只留给一个 live Session**，另一个会话会被明确拒绝——两个 Session 抢同一个外部浏览器，是这层里唯一真正的数据风险。
+
+如果那个浏览器本来就该被多个会话一起用（比如你日常那个 Chrome），把 `attachSharing` 设为 `shared`：独占检查不再拒绝第二个会话，每个会话仍各有自己的 daemon 和标签页；关掉某个会话的浏览器只关它自己那个标签页、只停它自己的 daemon，**不会关掉这个外部浏览器**。默认仍是 `exclusive`，也就是上面那句"第二个被拒绝"。
+
+共享有一点值得知道：某个会话**第一次打开页面**时，引擎会把这个浏览器里没人用的**空白**标签页顺手清掉，而"还没打开过任何页面"的会话正是这种空白页。引擎只关空白页，被影响的 daemon 下次调用会重建自己的标签页——代价最多是"在空白页上的那一次调用失败一次"，不会丢已经打开的内容。
 
 ### 7. 不碰你正在用的浏览器
 插件默认自起一个专用 Chrome 实例。它不碰你个人 Chrome 的 profile，所以不会出现 Chrome 144+ 那个"允许远程调试"的授权弹窗，更不会把你的登录态卷进自动化。需要接自己的浏览器时，显式切到 `mode: attach`：
@@ -336,7 +340,7 @@ Status   : ready
 
 `jev.decider` 与 `jev.typesafe.apiKey` 都是 `.volatile()` 的：改完当场生效（下次 `browser_goal` 或带 `intent` 的 `browser_act` 就用新值）。key 以 `role('secret')` 提交，永远不出现在任何表单响应里：输入框每次都是空的，留空表示不动已存的 key，写入成功会显示「已写入」。想**删掉**已存的 key，就从 profile patch 里删掉那一行。
 
-**其余开关都在 profile patch 里改**（改完 DSH 会重挂插件，和以前一样）：`mode`、`cdpEndpoint`、`executablePath`、`userDataDir`、`headless`、`allowScreenshots`、`requestTimeoutMs`、`delegate`、`delegateMode`、`subagentProvider`、`maxDepth`、`projectPath`、`pythonPath`、`reserveBrowserUseSlot`、`progress`、`progressIntervalMs`、`jev.enabled`、`jev.typesafe.fallbackURL`、`jev.typesafe.apiKeyEnv`、`jev.source`、`jev.textModel.baseURL`、`jev.textModel.model`、`jev.textModel.reasoning`、`jev.textModel.headers`、`jev.textModel.apiKey` / `.apiKeyEnv`。它们决定**有哪些工具**、跑哪个解释器、占不占组合槽位、子 agent 干活时话多话少，或者描述一个本不该让人操心的文本模型——做成表单字段等于承诺一个做不到的"立即生效"。`jev.typesafe.apiKeyEnv` 仍留给"不想把 key 写进 profile 文件、只想**指名**一份已存凭据（Models 页存的 DSH 凭据，或环境变量名）"的 patch；往这一项里直接粘密钥会被拒绝，并给出该写哪儿的提示。
+**其余开关都在 profile patch 里改**（改完 DSH 会重挂插件，和以前一样）：`mode`、`attachSharing`、`cdpEndpoint`、`executablePath`、`userDataDir`、`headless`、`allowScreenshots`、`requestTimeoutMs`、`delegate`、`delegateMode`、`subagentProvider`、`maxDepth`、`projectPath`、`pythonPath`、`reserveBrowserUseSlot`、`progress`、`progressIntervalMs`、`jev.enabled`、`jev.typesafe.fallbackURL`、`jev.typesafe.apiKeyEnv`、`jev.source`、`jev.textModel.baseURL`、`jev.textModel.model`、`jev.textModel.reasoning`、`jev.textModel.headers`、`jev.textModel.apiKey` / `.apiKeyEnv`。它们决定**有哪些工具**、跑哪个解释器、占不占组合槽位、子 agent 干活时话多话少，或者描述一个本不该让人操心的文本模型——做成表单字段等于承诺一个做不到的"立即生效"。`jev.typesafe.apiKeyEnv` 仍留给"不想把 key 写进 profile 文件、只想**指名**一份已存凭据（Models 页存的 DSH 凭据，或环境变量名）"的 patch；往这一项里直接粘密钥会被拒绝，并给出该写哪儿的提示。
 
 改完一次之后，下面的 YAML 写法仍然有效（也是 `projectPath` 这类字段唯一的入口）：
 
@@ -403,6 +407,7 @@ Status   : ready
 | `projectPath` | 空（用随包引擎，装在本包的 `.venv`，自动安装） | 改用的引擎 checkout；设置后只接受从这里导入引擎的解释器，插件也不再安装任何东西 |
 | `pythonPath` | 自动 | 指定一个已经能 import `jev_ultrafast` 的解释器；设置后只试它，插件也不再安装任何东西 |
 | `mode` | `launch` | `launch` 自起浏览器；`attach` 接已在运行的浏览器 |
+| `attachSharing` | `exclusive` | `attach` 模式下外部浏览器归谁：`exclusive` 一次只留给一个 live Session，第二个被拒绝；`shared` 允许所有 live Session 同时驱动它，各用各自的 daemon 与标签页，关掉自己的浏览器只关自己的标签页。`launch` 模式不接受 `shared`——每个 Session 本来就各有浏览器 |
 | `cdpEndpoint` | — | `attach` 模式的 DevTools 地址（`http(s)://` 或 `ws(s)://`）；留空则自动接你正在用、开了 `chrome://inspect` 远程调试的 Chrome |
 | `executablePath` | 系统 Chrome | 启动哪个浏览器 |
 | `userDataDir` | 每 Session 一个（`~/.jev-ultrafast/browser/<session>`） | 专用 profile 目录 |
@@ -464,7 +469,7 @@ npm 上未 scoped 的 `dsh-browser-use` 属于**另一个项目**（Browser Use 
 | 单槽注册，卸载时释放 | `ctx.get('browserUse')?.register('browser-use')`，disposer 由 effect 管理 |
 | 释放前先停工具、再等自有工作结束 | effect 的清理顺序：工具 → Session 浏览器 → 注册槽 |
 | 浏览器属于确切的 live Agent/Session | 每次调用都核对发起者仍是 live agent；resume/fork 是新的浏览器 |
-| 附加浏览器独占 | 该 provider 实例内一次只留给一个 live Session，第二个被明确拒绝（另有 2 项检查） |
+| 附加浏览器独占 | 该 provider 实例内一次只留给一个 live Session，第二个被明确拒绝，持有者关闭后下一个 Session 就能拿到（另有 3 项检查）；profile 用 `attachSharing: shared` 可主动放开，放开后每个 Session 各用各自的 daemon 与标签页（另有 9 项检查） |
 | attach 可用性是查出来的，不是假设的 | 填了地址就问 `GET /json/version`（`ws://` 地址只问有没有人在听），没填就通过引擎去找你正在用的浏览器；被指定驱动的浏览器不在时，doctor 报错而不是报 `ready`（另有 17 项检查） |
 | 取消是启动前后统一的通道 | 请求级 `AbortSignal`：在途请求立即结算（kind `cancelled`），委派与 `run.dispose()` 一起收尾；**已交付给浏览器的操作不回滚** |
 | 清理失败不重用 | 关闭失败的代次被标记为不可用：下一次打开换新进程 + 新 daemon 名，并把原因写进工具结果 |

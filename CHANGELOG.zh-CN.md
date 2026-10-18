@@ -6,6 +6,23 @@
 
 0.6.2 之前的版本是从本仓库的 git 历史重建出来的（0.6.2 之前没有版本说明）：每条记录都写明它取自哪些 commit，每个发布日期就是它那个打了标签的 commit 的日期。0.6.2 是第一个边做边写下来的版本。
 
+## [Unreleased]
+
+### 新增
+
+- `attachSharing`：`exclusive`（默认）或 `shared`。`mode: attach` 下设成 `shared` 就撤回"一次只留给一个 live Session"的保留：所有 live Session 都能驱动同一个外部浏览器，各用各自的 daemon 与标签页，第二个会话不再被拒。共享不改变"放手"的方式——关掉某个会话的浏览器只关它自己的标签页、只停它自己的 daemon，不会关掉其他会话还在用的那个浏览器（`test/test_bridge.py` 有专项断言）。`mode: launch` 配 `shared` 会在 profile 加载时被拒绝：自起的浏览器本来就属于一个 Session。
+- `Sessions.attachHolders`：正持有这个附加浏览器的 live Session 数量。会话在它**第一次调用浏览器工具**时就持有——保留发生在问引擎之前，这也正是第二个会话读到的那条拒绝信息有意义的原因——所以这个数字是"谁占着"，不是"谁开着页面"。attach 模式下 `browser_doctor` 会打印它（`attach sharing shared (2 live)`），于是"我另一个会话为什么被拒"用那个本来就会先问的工具就能答。
+- 针对共享两种结果的 9 项离线检查（`test/plugin.mjs`）：共享撤回拒绝并走到引擎检查、默认仍是独占、在 attach 之外要求共享会被拒绝，以及 `browser_close` 要讲清自己不关什么。独占检查现在覆盖保留的两半：第二个会话被拒，以及持有者关闭后下一个会话能拿到（`test/plugin.mjs` 的 `attachExclusivity`）。
+
+### 变更
+
+- attach 的拒绝信息补上第三条出路——`attachSharing "shared"`——与"等持有者关掉浏览器""用 `mode: "launch"` 让每个会话各有浏览器"并列。
+- `mode: attach` 下 `browser_close` 的描述与结果都改成它真正做的事：关掉本 Session 的标签页与 daemon，**不关**接来的那个浏览器；不再沿用 launch 模式那句"浏览器已停止"。
+
+### 修复
+
+- profile 里导出了 `BH_RUNTIME_DIR`（或 `BH_TMP_DIR`）却没带引擎自己的 `…_SHARED=1` 时，不再把所有 Session 的 daemon 压成同一个名字。插件本来就会在这个目录里为每个 Session 起一个 sidecar，所以现在由它替它们标上"目录是共享的"（`lib/sidecar.js` 的 `inheritedEnvironment`）；没有这一步时，第二个 Session 会找到第一个 Session 的 daemon，任何一方关闭都会把对方正在驱动的 daemon 停掉（`test/plugin.mjs` 另有 5 项检查）。运营者显式写的 `…_SHARED=0` 会被覆盖，这是有意的：让这个目录变成"共享"的调用方就是插件；而旧版本遗留在裸 `bu` 名下的 daemon 只是不再被寻址。
+
 ## [0.6.3] - 2026-10-18
 
 ### 新增
