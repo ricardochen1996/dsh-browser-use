@@ -11,6 +11,7 @@ The plugin's Node half speaks to this module over stdin/stdout; it is the Python
     hello        protocol version, interpreter, engine versions, method list
     open         start a page in a browser this sidecar owns; answer with one observation
     observe      read the current page again
+    evaluate     one JavaScript expression in the owned page, answered as text; no observation
     act          one operation on one target of the named observation; refuses a page that moved.
                  With an ``intent`` and no operation, the policy chooses the operation and target —
                  TypeSafe, or the text model itself with ``jev.decider: chat``; a TYPE_TEXT without
@@ -21,9 +22,16 @@ The plugin's Node half speaks to this module over stdin/stdout; it is the Python
     close        release the owned tab
     shutdown     stop the tab, the browser, and the daemon
 
-The bridge owns the observed page. A caller never sends a selector, a coordinate, or code: it sends
-an operation and a target that the previous observation offered. Model output cannot become browser
-input here any more than it can in the loop itself.
+The bridge owns the observed page. For every guarded operation a caller never sends a selector, a
+coordinate, or code: it sends an operation and a target that the previous observation offered, so
+model output cannot become browser input here any more than it can in the loop itself.
+
+``evaluate`` is the one method that takes code, and it is deliberately the exception: a model that
+needs a programmatic read or a one-off DOM operation must get it over this session's single CDP
+connection. The alternative is a second client (a raw websocket, another harness daemon), which
+Chrome 144+ answers with its own "Allow remote debugging?" prompt per connection and which leaves
+the page driven by two loops. It produces no observation: the next guard still belongs to the
+observation the page was last read in.
 
 Requests are answered in order, so one long browser call delays the next request instead of running
 beside it. A caller that no longer wants an answer stops waiting; the browser work already delivered
@@ -67,6 +75,13 @@ MAX_CONSOLE = 40
 MAX_EXCEPTIONS = 20
 MAX_REQUESTS = 40
 EVENT_TEXT = 600
+# One evaluated expression's answer is page data, not a page: cap it so a JSON dump cannot crowd out
+# the conversation. A string comes back as itself; every other value as JSON.
+MAX_EVAL_TEXT = 12000
+EVAL_EXCEPTION_TEXT = 2000
+# An expression that awaits a promise must not hold the sidecar (and the request behind it) forever.
+EVAL_TIMEOUT_MS = 30000
+EVAL_TIMEOUT_MAX_MS = 120000
 # How long a launched browser has to publish its DevTools endpoint before the run fails.
 BROWSER_BOOT_SECONDS = 25
 DEFAULT_PROFILE = Path.home() / ".jev-ultrafast" / "browser"
@@ -469,6 +484,58 @@ def engine_environment(values, endpoint=False):
                 os.environ.pop(name, None)
 
 
+def evaluate_timeout(value):
+    """How long an awaitPromise expression may run, in the CDP's own milliseconds, clamped."""
+    try:
+        timeout = int(value)
+    except (TypeError, ValueError):
+        return EVAL_TIMEOUT_MS
+    return max(1000, min(timeout, EVAL_TIMEOUT_MAX_MS))
+
+
+def stdio_safe(text):
+    """Text this line-delimited JSON protocol can actually write: a lone surrogate would end the sidecar.
+
+    An expression is the one input that can hand back a string no DOM ever holds, so the answer is
+    made encodable here rather than failing on the request that carries it.
+    """
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return text.encode("utf-8", "replace").decode("utf-8")
+    return text
+
+
+def evaluated(result):
+    """One ``Runtime.evaluate`` result as the text a model reads: the string itself, else JSON.
+
+    ``returnByValue`` cannot carry a DOM node, a function, or a Promise; Chrome sends a description
+    instead, and that description is the only useful answer there is.
+    """
+    if result.get("unserializableValue") is not None:
+        return stdio_safe(str(result["unserializableValue"]))  # NaN, Infinity, -0, 10n
+    if "value" in result:
+        value = result["value"]
+        if isinstance(value, str):
+            return stdio_safe(value)
+        try:
+            return stdio_safe(json.dumps(value, ensure_ascii=False))
+        except (TypeError, ValueError):
+            return stdio_safe(str(value))
+    return stdio_safe(str(result.get("description") or result.get("type") or "undefined"))
+
+
+def exception_text(details):
+    """What a thrown expression says — its description, or where it threw when there is none."""
+    exception = details.get("exception") or {}
+    text = str(exception.get("description") or details.get("text") or "").strip()
+    if not text:
+        text = "the expression threw"
+        if details.get("lineNumber") is not None:
+            text += f" at line {details['lineNumber']}, column {details.get('columnNumber')}"
+    return stdio_safe(text[:EVAL_EXCEPTION_TEXT])
+
+
 class Session:
     """One owned browser tab and the observation a caller's next action must refer to."""
 
@@ -540,6 +607,39 @@ class Session:
             raise BridgeError("no_session", "Open a page first.")
         self.page = self.browser.observe(screenshot=False)
         return {"page": observation(self.page)}
+
+    def evaluate(self, params):
+        """One JavaScript expression in the owned page, answered as text. Produces no observation.
+
+        This runs on the session's existing CDP connection on purpose: the caller must never need a
+        second client, because Chrome 144+ raises one "Allow remote debugging?" prompt per
+        connection and a second driver would race this one. The expression gets no user gesture, and
+        a throw is reported as ``js_error`` — the page is not treated as changed, since nothing was
+        executed on its behalf.
+        """
+        if self.browser is None:
+            raise BridgeError("no_session", "Open a page first.")
+        expression = params.get("expression")
+        if not isinstance(expression, str) or not expression.strip():
+            raise BridgeError("bad_request", "evaluate needs a JavaScript expression")
+        try:
+            response = self.browser.call(
+                "Runtime.evaluate",
+                expression=expression,
+                returnByValue=True,
+                awaitPromise=True,
+                userGesture=False,
+                timeout=evaluate_timeout(params.get("timeout_ms")),
+            )
+        except LostSession as error:
+            self.browser, self.page, self.history = None, None, []
+            raise BridgeError("lost_session", str(error)) from None
+        except RuntimeError as error:
+            raise BridgeError("browser_error", str(error)) from None
+        if response.get("exceptionDetails"):
+            raise BridgeError("js_error", exception_text(response["exceptionDetails"]))
+        text = evaluated(response.get("result", {}))
+        return {"text": text[:MAX_EVAL_TEXT], "chars": len(text), "truncated": len(text) > MAX_EVAL_TEXT}
 
     def act(self, params):
         if self.browser is None or self.page is None:
@@ -717,7 +817,7 @@ class Session:
         return {"bye": True}
 
 
-METHODS = ("hello", "open", "observe", "act", "screenshot", "diagnostics", "goal", "close", "shutdown")
+METHODS = ("hello", "open", "observe", "evaluate", "act", "screenshot", "diagnostics", "goal", "close", "shutdown")
 
 
 def hello():

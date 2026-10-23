@@ -62,17 +62,20 @@ dsh-browser-use/
 | `browser_task_status` | 按需取一次快照：常驻浏览器子 agent 在干什么——工作中（干了多久、哪个任务、在哪个页面），或空闲（上一轮怎么结束的、收尾消息）。看进度不用调它——进度会自己推过来（见下），结论本来也会以消息形式自动送达；所以 **`wait: true` 是最后的办法**：它会阻塞到子 agent 完成或给你发消息、或用户发话为止（`timeout_ms` 默认 2 分钟，最多 10 分钟），只在离了结果就没法往下走时用 |
 | `browser_doctor` | 自检：解释器、引擎版本、引擎安装进度、浏览器、委派状态（含本对话的子 agent 是否在工作）、以及每一项缺失的修复命令。`install: true` 立即安装引擎，或重试一次失败的安装 |
 
-浏览器工具挂在**被委派的子 agent 的 scope** 里（默认 6 个，`browser_goal` 关闭时）。只有它看得见、只有它能调用：
+浏览器工具挂在**被委派的子 agent 的 scope** 里（默认 7 个，`browser_goal` 关闭时）。只有它看得见、只有它能调用：
 
 | 工具 | 作用 |
 | --- | --- |
 | `browser_open` | 在**本 Session 独占的浏览器**里打开页面，返回动作空间表 |
 | `browser_page` | 重新观测，给出新的观测编号 |
 | `browser_act` | 对某个观测里的某个目标执行一次操作：`CLICK` / `TYPE_TEXT` / `SELECT` / `SCROLL_UP` / `SCROLL_DOWN` / `WAIT`。开启 jev 后可改传 `intent`：不给 `operation` 时由策略在这个观测上选出操作与目标；`TYPE_TEXT` 不给 `text` 时由文本模型写入值 |
+| `browser_eval` | 在页面里执行一个 JavaScript 表达式并返回结果：字符串原样返回，其他值按 JSON 返回，长度有上限。它是**唯一接受代码的工具**，而且跑在本 Session 自己的 CDP 连接上，所以模型要程序化读取时不需要再开第二个客户端。它不产生观测：要动手之前先用 `browser_page` 读一次。`allowEval: false` 可以收回它 |
 | `browser_screenshot` | 截取可视区域（图片附件） |
 | `browser_console` | 读取控制台消息、页面异常、失败请求与 4xx/5xx |
 | `browser_goal` | 把整个目标交给浏览器策略一次跑完：每一步的操作与目标都由它自己选（会消耗付费额度；`jev.decider` 决定是 Jev 还是文本模型回答） |
 | `browser_close` | 关掉标签页与 daemon。`mode: attach` 下接来的那个浏览器本身不会被关——不管有没有别的会话在共享它 |
+
+**一条连接，一个驱动者。** 上面每个工具（包括 `browser_eval`）都走本 Session daemon 持有的那**一条** CDP 连接。第二个客户端（直连 Chrome DevTools 端口的裸 websocket、puppeteer/playwright 脚本、另一个 `browser-harness` daemon）就是第二条连接，而 Chrome 144+ 是**按连接**要授权的：每个客户端各弹一张「要允许远程调试吗？」，没人回答的那张也只有发起它的客户端在撑着——把那个客户端关掉再重试，只会再弹一张。一次授权就是这么变成一摞弹窗的。插件自己从不这么干，浏览器 agent 也不该：这条规则写进了它的提示词，`browser_doctor` 在 `mode: attach` 下也会复述。万一弹窗真出现了：就点那一张，**不要重试**。
 
 **持续派活，不用开一堆 `browser_task`。** 插件用 DSH 原生的 continuable subagent（`ctx.subagents.startContinuable` / `sendMessage`），每个对话只有一个浏览器子 agent：
 
@@ -111,7 +114,7 @@ Without a target: WAIT
 ## 二、优势
 
 ### 1. 目标来自观测，不是模型编出来的
-模型输出的是 `(操作, 索引)`，**永远不是 selector、坐标或 JavaScript**。对照之下，Playwright MCP / Chrome DevTools MCP 这类方案要让模型自己写选择器，页面一改就点错、点空，而且无法事先验证。这里的索引只对"它刚读到的那一帧"有效。
+决策循环输出的是 `(操作, 索引)`，**永远不是 selector、坐标或 JavaScript**。对照之下，Playwright MCP / Chrome DevTools MCP 这类方案要让模型自己写选择器，页面一改就点错、点空，而且无法事先验证。这里的索引只对"它刚读到的那一帧"有效。`browser_eval` 是唯一一处有意的例外（见第一节）：它是一个独立的查看通道，返回的只是数据、不是决策——它不产生观测，它返回的东西也不会被插件拿去执行；`allowEval: false` 可以把它收回。
 
 ### 2. 新鲜度是一等公民
 每个决定都绑定在观测指纹上：页面变了，**拒绝执行并把新表交回来**，而不是硬点。实测百度首页：热榜自动轮换 → 第一次输入被拦下（"Nothing was executed"）→ 用新观测重选 → 成功。**任何变更都不会被自动重试**，所以不会出现"点两次""提交两遍"。
@@ -140,7 +143,7 @@ Without a target: WAIT
 ### 7. 不碰你正在用的浏览器
 插件默认自起一个专用 Chrome 实例。它不碰你个人 Chrome 的 profile，所以不会出现 Chrome 144+ 那个"允许远程调试"的授权弹窗，更不会把你的登录态卷进自动化。需要接自己的浏览器时，显式切到 `mode: attach`：
 
-- **接你正在用的 Chrome（不填 `cdpEndpoint`）**：在那个 Chrome 里打开 `chrome://inspect/#remote-debugging`，允许远程调试；插件通过 Chrome 写在 profile 里的 `DevToolsActivePort` 自动找到它，在里面新开一个标签页干活，登录态直接可用。macOS 下这个文件受隐私保护，**运行 DSH 的 App 需要"完全磁盘访问权限"**（系统设置 → 隐私与安全性 → 完全磁盘访问权限，授权后重启 DSH），否则会明确报 `no_permission`。每个 DSH Session 第一次连接时 Chrome 会弹一次"允许远程调试？"，点允许即可；插件只关自己开的标签页，结束时不会关你的浏览器。引擎直接用连接层为本次运行建好的那个标签页，不会再额外开空白页；你自己打开的空白新标签页也不会被关。
+- **接你正在用的 Chrome（不填 `cdpEndpoint`）**：在那个 Chrome 里打开 `chrome://inspect/#remote-debugging`，允许远程调试；插件通过 Chrome 写在 profile 里的 `DevToolsActivePort` 自动找到它，在里面新开一个标签页干活，登录态直接可用。macOS 下这个文件受隐私保护，**运行 DSH 的 App 需要"完全磁盘访问权限"**（系统设置 → 隐私与安全性 → 完全磁盘访问权限，授权后重启 DSH），否则会明确报 `no_permission`。每个 DSH Session 第一次连接时 Chrome 会弹一次「允许远程调试？」，点允许即可——这也是插件唯一会引发的弹窗：所有工具（含 `browser_eval`）都复用那一条连接。不要对同一个 Chrome 再开自己的 CDP 客户端（裸 websocket、puppeteer/playwright 脚本、另一个 harness daemon）：Chrome 144+ 按连接分别授权，第二个客户端就是第二张弹窗；弹窗还挂着时重试，只会再多一张，而不是替换掉原来那张。插件只关自己开的标签页，结束时不会关你的浏览器。引擎直接用连接层为本次运行建好的那个标签页，不会再额外开空白页；你自己打开的空白新标签页也不会被关。
 - **接一个专用的调试 Chrome（填 `cdpEndpoint`）**：`http://127.0.0.1:9333` 或 `ws://…/devtools/browser/…`，见下方配置表。
 
 attach 模式是**在 profile 加载时**就检查的，而不是等到第一次调用浏览器工具：填了 `cdpEndpoint` 就问它的 `/json/version`（`ws://` 地址则只问端口上有没有人在听），没填就按引擎找它的方式去找你正在用的 Chrome。检查通过，`browser_doctor` 才会报 `Status: ready`；不通过，加载日志里直接带着修复办法 —— `node bin/doctor.mjs --mode attach` 可以在终端里问同一个问题。这项检查只读 Chrome 已经公开的东西：不开页面，也不会等任何弹窗。
@@ -340,7 +343,7 @@ Status   : ready
 
 `jev.decider` 与 `jev.typesafe.apiKey` 都是 `.volatile()` 的：改完当场生效（下次 `browser_goal` 或带 `intent` 的 `browser_act` 就用新值）。key 以 `role('secret')` 提交，永远不出现在任何表单响应里：输入框每次都是空的，留空表示不动已存的 key，写入成功会显示「已写入」。想**删掉**已存的 key，就从 profile patch 里删掉那一行。
 
-**其余开关都在 profile patch 里改**（改完 DSH 会重挂插件，和以前一样）：`mode`、`attachSharing`、`cdpEndpoint`、`executablePath`、`userDataDir`、`headless`、`allowScreenshots`、`requestTimeoutMs`、`delegate`、`delegateMode`、`subagentProvider`、`maxDepth`、`projectPath`、`pythonPath`、`reserveBrowserUseSlot`、`progress`、`progressIntervalMs`、`jev.enabled`、`jev.typesafe.fallbackURL`、`jev.typesafe.apiKeyEnv`、`jev.source`、`jev.textModel.baseURL`、`jev.textModel.model`、`jev.textModel.reasoning`、`jev.textModel.headers`、`jev.textModel.apiKey` / `.apiKeyEnv`。它们决定**有哪些工具**、跑哪个解释器、占不占组合槽位、子 agent 干活时话多话少，或者描述一个本不该让人操心的文本模型——做成表单字段等于承诺一个做不到的"立即生效"。`jev.typesafe.apiKeyEnv` 仍留给"不想把 key 写进 profile 文件、只想**指名**一份已存凭据（Models 页存的 DSH 凭据，或环境变量名）"的 patch；往这一项里直接粘密钥会被拒绝，并给出该写哪儿的提示。
+**其余开关都在 profile patch 里改**（改完 DSH 会重挂插件，和以前一样）：`mode`、`attachSharing`、`cdpEndpoint`、`executablePath`、`userDataDir`、`headless`、`allowScreenshots`、`allowEval`、`requestTimeoutMs`、`delegate`、`delegateMode`、`subagentProvider`、`maxDepth`、`projectPath`、`pythonPath`、`reserveBrowserUseSlot`、`progress`、`progressIntervalMs`、`jev.enabled`、`jev.typesafe.fallbackURL`、`jev.typesafe.apiKeyEnv`、`jev.source`、`jev.textModel.baseURL`、`jev.textModel.model`、`jev.textModel.reasoning`、`jev.textModel.headers`、`jev.textModel.apiKey` / `.apiKeyEnv`。它们决定**有哪些工具**、跑哪个解释器、占不占组合槽位、子 agent 干活时话多话少，或者描述一个本不该让人操心的文本模型——做成表单字段等于承诺一个做不到的"立即生效"。`jev.typesafe.apiKeyEnv` 仍留给"不想把 key 写进 profile 文件、只想**指名**一份已存凭据（Models 页存的 DSH 凭据，或环境变量名）"的 patch；往这一项里直接粘密钥会被拒绝，并给出该写哪儿的提示。
 
 改完一次之后，下面的 YAML 写法仍然有效（也是 `projectPath` 这类字段唯一的入口）：
 
@@ -419,6 +422,7 @@ Status   : ready
 | `jev.source` | `session` | **文本模型**从哪来：`session`（对话自己的路由）或 `custom`（用下面的 `jev.textModel` 端点与 key）。不做表单字段：表单的简单用法就是默认值 |
 | `jev.textModel` | 对话自己的路由 | 文本模型的覆盖项：`model`、`reasoning`（默认 `thinking-disabled`）、`headers`；`custom` 时另加 `baseURL`、`apiKeyEnv` / `apiKey`。同样不做表单字段 |
 | `allowScreenshots` | `true` | 开放 `browser_screenshot` |
+| `allowEval` | `true` | 开放 `browser_eval`：一个 JavaScript 表达式，走本 Session 自己的 CDP 连接。默认开着，因为缺了它模型就会去开第二个客户端；设为 `false` 就回到只有受保护动作空间的表面 |
 | `requestTimeoutMs` | `180000` | 单次 sidecar 请求上限 |
 | `delegate` | `true` | 浏览器操作交给子 agent；`false` 时挂给本对话（直接模式） |
 | `delegateMode` | `persistent` | `persistent`：每个对话一个常驻浏览器子 agent，后续任务都发给它；`one-shot`：每个任务一个子 agent、等回报再返回。provider 不支持 continuable 时自动用 `one-shot` |
@@ -436,9 +440,9 @@ npm run check             # lint、Python 单测、发版元数据 + Node 检查
 uv run pytest             # sidecar 协议与发版门禁单测（离线）
 uv run python test/check_bridge.py   # 10 项：sidecar 端到端（stdio + 真浏览器）
 uv run python test/check_tabs.py     # 5 项：一次启动只留一个标签页
-node test/plugin.mjs      # 83 项：24 工具与拒绝（真浏览器）+ 3 元素状态渲染 + 4 缺引擎诊断 + 16 引擎配置 + 2 attach 独占 + 3 接你的 Chrome + 17 attach 预检 + 11 设置页表单与即时生效 + 3 在途取消
-node test/delegation.mjs  # 70 项：对话只见 browser_task(+_status)、常驻子 agent 接收后续任务、释放/重启后恢复并重新挂工具、状态与等待（结算、超时、用户发话、子 agent 来信、取消、静默退出）、fresh 与丢失替换、一次性委派、取消与回退
-node test/inspector.mjs   # 27 项：Web 端注册 + 配置表单的注册键/字段/写回 + host 路由 + 页面可渲染
+node test/plugin.mjs      # 123 项：34 工具、拒绝与提示词规则（真浏览器）+ 3 元素状态渲染 + 4 缺引擎诊断 + 29 引擎配置 + 3 attach 独占 + 9 attach 共享 + 6 接你的 Chrome + 17 attach 预检 + 10 设置页表单与即时生效 + 5 sidecar 环境 + 3 在途取消
+node test/delegation.mjs  # 100 项：对话只见 browser_task(+_status)、常驻子 agent 接收后续任务、释放/重启后恢复并重新挂工具、状态与等待（结算、超时、用户发话、子 agent 来信、取消、静默退出）、fresh 与丢失替换、一次性委派、取消与回退
+node test/inspector.mjs   # 43 项：Web 端注册 + 配置表单的注册键/字段/写回 + host 路由 + 页面可渲染
 node test/provision.mjs   # 93 项：14 uv 查找与失败诊断 + 24 安装（同时只跑一次、失败→修复、重试窗口、没有 uv、超时）+ 23 Python 路径（探测、venv、按哈希 pip、wheel、索引、回退）+ 21 经引擎检查的安装与报告 + 4 取消等待 + 7 doctor 工具与命令行（假 uv 与假 python，不下载）
 npm run release:check     # 核对 npm/Python/uv.lock 版本、发布元数据、随包引擎（wheel、清单、lock 哈希）与 vendor/requirements.txt 一致
 npm run release:pack      # 检查并独立安装实际 npm 包，让它自己构建引擎环境，输出到 dist/，不会发布
@@ -518,7 +522,7 @@ DSH host (Node)                                        ← 本仓库 lib/
 - 依赖 Python 引擎；引擎不可用时浏览器工具会拒绝并给出修复命令（`browser_doctor` 随时可查）。
 - `browserUse` 槽独占（仅当该服务被挂载时）。
 - 改了插件代码要**重启 DSH** 才生效。
-- 不提供 `browser_eval` / 坐标输入——模型输出变成代码会破坏本项目的第一原则。
+- `browser_eval` 是唯一接受代码的工具，而且默认开着。理由是对面更糟：模型要程序化读取时，会自己去开一个 CDP 客户端，而 Chrome 144+ 是**按连接**要授权的——一张没人回答的弹窗会变成一摞。它被明确写成受保护循环的唯一例外，不产生观测；`allowEval: false` 可以回到"模型输出永远不可能变成代码"的表面。坐标输入依然不接受。
 - 页面状态不随 Session 恢复：resume/fork 会开新浏览器（DSH provider 约定如此）。
 - `browser_goal` 与带 `intent` 的 `browser_act` 花的是模型额度（Jev，或由文本模型决策时就是它），DSH 的用量统计看不到这部分。
 - **委派需要组合里有 subagent provider**（如 `@deepseek-ai/dsh-subagent-spawn-in-process`，且它能组合进程内子 agent）。没有就退回直接模式：日志 WARN、`browser_doctor` 的 `Delegation:` 行写明原因。标准 DSH base bundle 默认已挂 `spawn`；如果 provider 在插件**加载之后**才出现，要重启 DSH 才会进入委派模式。

@@ -47,6 +47,10 @@ class FakeBrowser:
         self.session = "session-1"
         self.state = state or page(url=url)
         self.calls = []
+        # What an expression answers, and which expressions were run: the evaluate path has no page
+        # to look at, so the test states the reply instead of trusting a browser to agree with it.
+        self.replies = {}
+        self.evaluated = []
 
     def observe(self, screenshot=True):
         return dict(self.state)
@@ -65,6 +69,11 @@ class FakeBrowser:
         return None
 
     def call(self, method, **params):
+        if method == "Runtime.evaluate":
+            # The one seam an expression crosses; a reply is keyed by the expression itself, so a
+            # test says what the page would answer without a page.
+            self.evaluated.append(params)
+            return self.replies.get(params["expression"], {"result": {"type": "undefined"}})
         assert method == "Page.captureScreenshot"
         return {"data": "anBlZw=="}
 
@@ -299,7 +308,59 @@ def test_parameters_are_required_before_a_page_is_open():
     assert failure(empty, "observe")["kind"] == "no_session"
     assert failure(empty, "screenshot")["kind"] == "no_session"
     assert failure(empty, "act", operation="CLICK", target="1", fingerprint="x")["kind"] == "no_session"
+    assert failure(empty, "evaluate", expression="1")["kind"] == "no_session"
     assert failure(empty, "open", url="")["kind"] == "bad_request"
+
+
+def test_evaluate_answers_on_the_session_connection_without_an_observation(session):
+    """The whole point of evaluate: a programmatic read over the connection the Session already owns.
+
+    Nothing here opens a second CDP client — the fake browser has exactly one — and a result is text,
+    not a new observation: the guard a later action needs still belongs to the page it was read in.
+    """
+    before = session.page["fingerprint"]
+    session.browser.replies["document.title"] = {"result": {"type": "string", "value": "Search"}}
+    result = call(session, "evaluate", expression="document.title")
+    assert result == {"text": "Search", "chars": 6, "truncated": False}
+    assert session.page["fingerprint"] == before  # no observation was produced
+    assert session.browser.evaluated[-1]["userGesture"] is False
+    assert session.browser.evaluated[-1]["timeout"] == bridge.EVAL_TIMEOUT_MS
+
+
+def test_evaluate_renders_a_value_as_json_and_caps_what_it_returns(session):
+    session.browser.replies["list"] = {"result": {"type": "object", "value": [1, "two"]}}
+    assert call(session, "evaluate", expression="list")["text"] == '[1, "two"]'
+    session.browser.replies["node"] = {"result": {"type": "object", "subtype": "node", "description": "div.app"}}
+    assert call(session, "evaluate", expression="node")["text"] == "div.app"
+    session.browser.replies["long"] = {"result": {"type": "string", "value": "x" * 20000}}
+    capped = call(session, "evaluate", expression="long")
+    assert capped["chars"] == 20000 and capped["truncated"] is True
+    assert len(capped["text"]) == bridge.MAX_EVAL_TEXT
+
+
+def test_evaluate_reports_a_thrown_expression_as_a_refusal_not_as_a_lost_page(session):
+    session.browser.replies["null.x"] = {
+        "result": {"type": "object"},
+        "exceptionDetails": {"text": "Uncaught", "exception": {"description": "TypeError: null is not an object"}},
+    }
+    error = failure(session, "evaluate", expression="null.x")
+    assert error["kind"] == "js_error" and "TypeError: null is not an object" in error["message"]
+    assert session.browser is not None and session.page is not None  # the page is fine; only the expression threw
+    assert failure(session, "evaluate", expression="  ")["kind"] == "bad_request"
+
+
+def test_evaluate_answers_text_the_stdio_protocol_can_carry(session):
+    """An expression can return a string no DOM ever holds; the write must not end the sidecar."""
+    session.browser.replies["weird"] = {"result": {"type": "string", "value": "\ud800"}}
+    result = call(session, "evaluate", expression="weird")
+    result["text"].encode("utf-8")  # a lone surrogate would raise here, on the request that carried it
+
+
+def test_evaluate_timeout_is_clamped_to_the_cap_and_the_default():
+    assert bridge.evaluate_timeout(None) == bridge.EVAL_TIMEOUT_MS
+    assert bridge.evaluate_timeout("soon") == bridge.EVAL_TIMEOUT_MS
+    assert bridge.evaluate_timeout(10) == 1000
+    assert bridge.evaluate_timeout(10**9) == bridge.EVAL_TIMEOUT_MAX_MS
 
 
 def test_open_requires_a_url_and_reports_the_first_page(session):

@@ -102,9 +102,19 @@ async function main() {
 
   const run = (name, args) => tools.get(name).execute(args, { agent, signal: new AbortController().signal })
   try {
-    check([...tools.keys()].sort().join(',') === 'browser_act,browser_close,browser_console,browser_doctor,browser_open,browser_page,browser_screenshot',
+    check([...tools.keys()].sort().join(',') === 'browser_act,browser_close,browser_console,browser_doctor,browser_eval,browser_open,browser_page,browser_screenshot',
       `the tool surface is ${[...tools.keys()].join(', ')}`)
     check(!tools.has('browser_goal'), 'goal mode stays off unless the profile asks for it')
+
+    // The rule that keeps Chrome's per-connection prompt from being raised a second time is a
+    // sentence in the prompt, so it is checked like any other behaviour of this plugin.
+    const { browserGuidance } = await import(pathToFileURL(join(PACKAGE_ROOT, 'lib', 'tools.js')).href)
+    const withEval = browserGuidance({ jev: { enabled: false }, allowEval: true })
+    check(withEval.includes('One connection, one driver'), 'the guidance names the one-connection rule')
+    check(withEval.includes('Use browser_eval'), 'the guidance points programmatic work at browser_eval')
+    check(withEval.includes('never retry'), 'the guidance says not to retry while Chrome is asking')
+    check(!browserGuidance({ jev: { enabled: false }, allowEval: false }).includes('Use browser_eval'),
+      'with browser_eval withdrawn the guidance does not name it')
 
     const doctor = await run('browser_doctor', {})
     check(/Status\s*:\s*ready/u.test(doctor.text), 'the doctor reports a ready engine')
@@ -148,6 +158,22 @@ async function main() {
 
     const console_ = await run('browser_console', {})
     check(console_.text.startsWith('Page '), 'console output is reported for the page this Session drives')
+
+    // browser_eval is the answer to "a model needs a programmatic read": it must be answered on the
+    // Session's own connection, produce no observation, and report a throw as text rather than as a
+    // failed call — a tool failure is what sends a model looking for another CDP client.
+    const evaluated = await run('browser_eval', { expression: 'document.title' })
+    check(/Casa Flora/u.test(evaluated.text), 'browser_eval returns the value the page holds')
+    check(evaluated.observation === undefined, 'browser_eval produces no observation of its own')
+    const counted = await run('browser_eval', { expression: "document.querySelectorAll('h1').length" })
+    check(/returned 1 character/u.test(counted.text) && /^1$/mu.test(counted.text),
+      'a number comes back as the digits it is')
+    const structured = await run('browser_eval', { expression: "JSON.stringify({ links: document.querySelectorAll('a').length })" })
+    check(/"links":\d+/u.test(structured.text), 'an object comes back as JSON')
+    const thrown = await run('browser_eval', { expression: 'null.boom' })
+    check(/threw/u.test(thrown.text), 'a throwing expression is reported as text, not as a failed call')
+    const reread = await run('browser_page', {})
+    check(reread.observation > detail.observation, 'a page read after an evaluation is a new observation')
 
     const before = detail.observation
     const closed = await run('browser_close', {})
@@ -448,6 +474,16 @@ async function attachToYourChrome() {
   plugin.apply(ctx, { pythonPath: '/nonexistent/python', projectPath: '', mode: 'attach' })
   const doctor = await tools.get('browser_doctor').execute({}, { agent, signal: new AbortController().signal })
   check(/mode attach on your running Chrome/u.test(doctor.text), 'the doctor names your running Chrome as the attached browser')
+  check(/one CDP client for this Session/u.test(doctor.text),
+    'the doctor says one client is the whole connection surface for an attached browser')
+
+  // Withdrawing browser_eval is a profile decision, and it must remove the tool without touching the
+  // guarded surface — the escape hatch is a setting, not a side effect of anything else.
+  const strict = fakeContext()
+  plugin.apply(strict.ctx, { pythonPath: '/nonexistent/python', mode: 'attach', allowEval: false })
+  check(!strict.tools.has('browser_eval'), 'allowEval: false withdraws browser_eval')
+  check(strict.tools.has('browser_page') && strict.tools.has('browser_act'), 'the guarded tools stay when browser_eval is gone')
+  await strict.dispose()
 
   let refused
   try {
@@ -479,7 +515,7 @@ async function attachToYourChrome() {
   const second = await attempt(make('session-yours-two'))
   check(/your running Chrome .* is attached by another live Session/u.test(second),
     'a second Session is refused your running Chrome by name')
-  console.log('PASS: 3 attach-to-your-Chrome checks; no browser, no engine')
+  console.log('PASS: 6 attach-to-your-Chrome checks; no browser, no engine')
 }
 
 /**

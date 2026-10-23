@@ -294,7 +294,7 @@ async function waitForChild(host, index = 0) {
   return host.delegations[index]
 }
 
-const BROWSER_TOOLS = 'browser_act,browser_close,browser_console,browser_goal,browser_open,browser_page,browser_screenshot'
+const BROWSER_TOOLS = 'browser_act,browser_close,browser_console,browser_eval,browser_goal,browser_open,browser_page,browser_screenshot'
 const textOf = content => content.map(block => block.text).join('\n')
 
 /** The default composition: one persistent browser subagent per conversation, on a real browser. */
