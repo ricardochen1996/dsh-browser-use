@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 Versions before 0.6.2 were reconstructed from this repository's git history (there was no changelog before 0.6.2): each entry names the commits it was derived from, and every release date is the date of its tagged commit. 0.6.2 is the first release written down as it was made.
 
+## [0.7.1] - 2026-10-23
+
+### Added
+
+- `browser_eval`: one JavaScript expression evaluated on the page this Session owns, answered as text — a string as itself, every other value as JSON, a DOM node or function by its description, capped at 12000 characters. It exists because a model that needed a programmatic read had no supported way to get one, so it started its own CDP client; that is what turned Chrome's per-connection "Allow remote debugging?" consent into a stack of prompts. It runs on the Session's own connection, gets no user gesture, bounds an awaited promise (30 s by default, at most 120 s), reports a thrown expression as text instead of as a failed call, and produces no observation: the next `browser_act` still belongs to the observation the page was last read in. Config key `allowEval` (default `true`) withdraws it, restoring a surface where model output can never become code.
+- `browser_doctor` in `mode: attach` prints a `Connection:` line — one CDP client for this Session, because Chrome 144+ asks once per connection, so a second client is a second prompt. The doctor is the tool a person already calls first when a browser behaves oddly.
+- 10 checks in `test/plugin.mjs` (4 for the guidance rule, 6 for `browser_eval`: the value, no observation, digits as digits, JSON for an object, a throw as text, and a fresh observation after an evaluation) and 5 offline checks in `test/test_bridge.py` (the value and its CDP parameters, JSON/capping/DOM description, a thrown expression as `js_error` rather than a lost page, the timeout clamp, and a lone surrogate that must come back encodable instead of ending the sidecar). The attach-to-your-Chrome group gained 3: the doctor's `Connection:` line, `allowEval: false` withdrawing the tool, and the guarded tools staying.
+
+### Changed
+
+- The browser guidance now states the one-connection rule: every browser tool shares the single CDP connection this Session's daemon holds; a second client (a raw websocket to Chrome's DevTools port, a puppeteer/playwright script, another `browser-harness` daemon) raises another Chrome prompt and races the page; if the prompt appears, approve that exact sheet once and never retry, because a retry drops it and raises a new one. With `allowEval` on the guidance names `browser_eval` as the supported way to do programmatic work; with it off it says the table is all there is.
+- Both READMEs: the tool table, the configuration table, the attach section, the "targets come from the observation" claim and the limits section document `browser_eval`, the `allowEval` switch and the per-connection prompt rule, so the project's first principle is stated as having exactly one named, switchable exception.
+
+### Fixed
+
+- A model that needs a programmatic read no longer has to leave the plugin. The supported path is one connection, so Chrome raises its one "Allow remote debugging?" prompt instead of one per short-lived client; the plugin itself never opened a second client, and the prompt storm in the reported session came from an agent's ad-hoc CDP scripts after a delegated task was interrupted.
+
+_Commits: `5213652` (browser_eval, the one-connection rule, the doctor line and their checks), this release commit._
+
 ## [0.7.0] - 2026-10-18
 
 ### Added
