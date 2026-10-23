@@ -642,12 +642,13 @@ async function settingsForm() {
   }
   const fields = formFields(config.Config).sort()
   ok(JSON.stringify(fields) === JSON.stringify([
+    'mode', 'attachSharing',
     'jev.decider',
     'jev.typesafe.apiKey', 'jev.typesafe.baseURL', 'jev.typesafe.model',
-  ].sort()), `the form offers the decider and the Jev endpoint and nothing else (got ${fields.join(', ')})`)
+  ].sort()), `the form offers the connection switches, the decider and the Jev endpoint, and nothing else (got ${fields.join(', ')})`)
   ok(fields.includes('jev.typesafe.apiKey') && !fields.includes('jev.typesafe.apiKeyEnv'),
     'the form asks for the Jev key itself, never for the name of a credential holding it')
-  ok(!fields.includes('mode') && !fields.includes('delegate') && !fields.includes('allowScreenshots')
+  ok(!fields.includes('delegate') && !fields.includes('allowScreenshots')
     && !fields.includes('projectPath') && !fields.includes('reserveBrowserUseSlot'),
   'the switches that decide which tools exist stay profile-patch settings')
   ok(!fields.includes('jev.enabled') && !fields.includes('jev.source') && !fields.some(field => field.startsWith('jev.textModel')),
@@ -660,7 +661,10 @@ async function settingsForm() {
     projectPath: '',
   })
   ok(typeof parsed.jev.decider?.get === 'function' && config.plain(parsed.jev.decider) === 'typesafe',
-    'the one live field arrives as a reference the plugin can read now')
+    'a live field arrives as a reference the plugin can read now')
+  ok(typeof parsed.mode?.get === 'function' && config.plain(parsed.mode) === 'launch'
+    && typeof parsed.attachSharing?.get === 'function' && config.plain(parsed.attachSharing) === 'exclusive',
+  'the connection switches are live fields too, so the form can offer them')
   plugin.apply(ctx, parsed)
   const doctor = async () => (await tools.get('browser_doctor').execute({}, { agent, signal: new AbortController().signal })).text
   const actSchema = () => tools.get('browser_act').parameters
@@ -679,6 +683,22 @@ async function settingsForm() {
     'neither an operation nor an intent is refused')
   ok(/^Jev\s*: on, source session/u.test((await doctor()).split('\n').find(line => line.startsWith('Jev')) ?? ''),
     'the doctor reports the edited jev state')
+
+  // The connection switches are the ones a person flips while working: the next browser_open reads
+  // them, and the readers that report them (the doctor's Config line) must follow without a reload.
+  const configLine = async () => (await doctor()).split('\n').find(line => line.startsWith('Config')) ?? ''
+  ok(/^Config\s*:\s*mode launch/u.test(await configLine()), 'the doctor starts on the mode the profile launched with')
+  parsed.mode[LIVE]('attach')
+  parsed.attachSharing[LIVE]('shared')
+  emit('loader/volatile-update', [['mode'], ['attachSharing']])
+  const attached = await configLine()
+  ok(/mode attach/u.test(attached) && /attach sharing shared/u.test(attached),
+    `a live edit of the connection switches reaches the next reader (got ${attached.trim()})`)
+  // ...and the pair the schema refuses is still refused, so the form cannot talk it into one.
+  parsed.mode[LIVE]('launch')
+  emit('loader/volatile-update', [['mode']])
+  ok(/mode attach/u.test(await configLine()),
+    'a live edit that would leave sharing on a launched browser is refused, keeping the configuration that was running')
   console.log(`PASS: ${count} settings-form checks; no browser, no engine, no model calls`)
 }
 

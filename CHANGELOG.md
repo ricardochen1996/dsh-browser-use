@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 Versions before 0.6.2 were reconstructed from this repository's git history (there was no changelog before 0.6.2): each entry names the commits it was derived from, and every release date is the date of its tagged commit. 0.6.2 is the first release written down as it was made.
 
+## [0.8.0] - 2026-10-23
+
+### Added
+
+- The Settings page offers the connection switches, not only Jev's: **`mode`** (`launch` starts a browser this Session owns, `attach` drives the one you already use) and, once the mode is `attach`, **`attachSharing`** (`exclusive` keeps it for the first live Session, `shared` lets every Session drive it in its own tab). Both are live fields in `lib/config.js`, so the Loader commits an edit into the reference the running plugin holds and the next `browser_open` honours it — a browser a Session has already opened keeps the mode it was opened under, so flipping the switch never reaches back into a running browser. The sharing row states its stored value on a locked control while the mode launches its own browser, and moving the mode back to `launch` carries the `attachSharing: "exclusive"` reset in the same write, because the schema refuses `shared` with `launch` and a form that wrote one half alone would hand the person a refusal instead of the change they asked for (`lib/client.js`; 49 checks in `test/inspector.mjs`, and the form-field set in `test/plugin.mjs` now names both).
+
+### Fixed
+
+- A launch no longer fails on a machine whose proxy does not exclude `127.0.0.1`. Waiting for the browser's DevTools endpoint reads `http://127.0.0.1:<port>/json/version` with `urllib`, which applies the machine's proxy settings, so a proxy answering that request itself made a browser that had started perfectly well fail every `browser_open` as "did not open a DevTools endpoint within 25s" — for 25 seconds, on every attempt, while the Session's profile directory showed the browser up and writing to it. The probe is a loopback request and now goes through an opener with no proxy at all, the way `discover_local_browser` already reaches its endpoint over a raw socket (`sidecar/bridge.py`).
+- A failed launch now says what it can instead of only how long it waited: the executable, the profile, the port, the port the profile recorded in `DevToolsActivePort`, and the last lines the browser printed. Its stdout and stderr used to go to `DEVNULL`, which is exactly where a refused launch states its reason (`sidecar/bridge.py` `launch_diagnosis`; 5 offline checks in `test/test_bridge.py`, including the proxy that answers for a listening browser).
+
+_Commits: `7746bd2` (the loopback probe, the launch diagnosis and their checks), this commit (the connection switches in the Settings page)._
+
 ## [0.7.1] - 2026-10-23
 
 ### Added

@@ -6,6 +6,19 @@
 
 0.6.2 之前的版本是从本仓库的 git 历史重建出来的（0.6.2 之前没有版本说明）：每条记录都写明它取自哪些 commit，每个发布日期就是它那个打了标签的 commit 的日期。0.6.2 是第一个边做边写下来的版本。
 
+## [0.8.0] - 2026-10-23
+
+### 新增
+
+- 配置页现在给出**连接方式**这一组，不再只有 Jev 的开关：**`mode`**（`launch` 由插件自己启动一个只属于本 Session 的浏览器，`attach` 驱动你已经在用的那一个），以及 `mode` 为 `attach` 时的 **`attachSharing`**（`exclusive` 把浏览器留给第一个活跃 Session，`shared` 让每个 Session 各开自己的标签页同时驱动）。两者在 `lib/config.js` 里都是 live 字段：Loader 会把改动提交进运行中插件持有的那个引用，下一次 `browser_open` 就按新值走——而一个 Session 已经打开的浏览器仍按它被打开时的模式继续，所以拨这个开关不会回头打断正在跑的浏览器。`launch` 模式下，共享那一行用一个锁定控件显示当前值（不弹菜单，schema 本来就会拒掉那一组），而把模式拨回 `launch` 时会在同一次写入里带上 `attachSharing: "exclusive"` 的重置——否则只写一半，人拿到的是拒绝而不是他想要的改动（`lib/client.js`；`test/inspector.mjs` 49 项检查，`test/plugin.mjs` 的表单字段集合现在也列出了这两项）。
+
+### 修复
+
+- 本机代理没有排除 `127.0.0.1` 的机器上，启动不再失败。等待浏览器 DevTools 端点的那次探测用 `urllib` 读 `http://127.0.0.1:<port>/json/version`，而 `urllib` 会套用本机代理设置；于是替它作答的代理让一个明明已经正常启动的浏览器，每一次 `browser_open` 都以「25 秒内没有打开 DevTools 端点」失败——25 秒、每一次都是，而该 Session 的 profile 目录里能看见浏览器起来并在写盘。这次探测是回环请求，现在改走完全不经过代理的 opener，和 `discover_local_browser` 早就用裸 socket 取端点是一个道理（`sidecar/bridge.py`）。
+- 启动失败现在会说出它能说的，而不只是等了多久：启动的是哪个可执行文件、哪个 profile、哪个端口、profile 的 `DevToolsActivePort` 里记录的端口，以及浏览器自己最后打印的几行。它的 stdout/stderr 以前直接进了 `DEVNULL`，而拒绝启动的原因恰好写在那里（`sidecar/bridge.py` 的 `launch_diagnosis`；`test/test_bridge.py` 新增 5 项离线检查，其中包括「代理替一个正在监听的浏览器作答」那一条）。
+
+_Commits: `7746bd2`（回环探测、启动失败的说明与它们的检查），本次提交（配置页的连接方式开关）。_
+
 ## [0.7.1] - 2026-10-23
 
 ### 新增

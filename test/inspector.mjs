@@ -241,9 +241,10 @@ async function checkSwitchForm() {
   }
   const pageFields = pathsOf(page.component({ view: 'page', form }))
   check(JSON.stringify(pageFields) === JSON.stringify([
+    'mode', 'attachSharing',
     'jev.decider',
     'jev.typesafe.apiKey', 'jev.typesafe.baseURL', 'jev.typesafe.model',
-  ].sort()), `the form offers the decider and TypeSafe and nothing else (got ${pageFields.join(', ')})`)
+  ].sort()), `the form offers the connection switches, the decider and TypeSafe, and nothing else (got ${pageFields.join(', ')})`)
 
   // One switch, two answers: no way to turn Jev off, because who answers it is the only question.
   const decider = controlFor(page.component({ view: 'page', form }), 'jev.decider')
@@ -258,24 +259,24 @@ async function checkSwitchForm() {
 
   // The copy follows the shell's active language: the same registration, the same rows, read twice.
   const englishLabels = labelsOf(page.component({ view: 'page', form }))
-  check(JSON.stringify(englishLabels) === JSON.stringify(['Decider', 'Jev URL', 'Jev Model', 'Jev API key']),
+  check(JSON.stringify(englishLabels) === JSON.stringify(['Connection', 'Attach sharing', 'Decider', 'Jev URL', 'Jev Model', 'Jev API key']),
     `the rows read English while English is active (got ${englishLabels.join(', ')})`)
   check(JSON.stringify(controlFor(page.component({ view: 'page', form }), 'jev.decider')
     .find(node => typeof node.props?.onSelect === 'function').props.items.map(item => item.label))
     === JSON.stringify(['Jev', 'Text model (no Jev key needed)']),
   'the decider menu entries read English too')
-  check(hintsOf(page.component({ view: 'page', form }))[0]?.startsWith('Jev is always on'),
+  check(hintsOf(page.component({ view: 'page', form }))[0]?.startsWith('launch starts a browser'),
     'the hint under the decider reads English too')
   locale.active = 'zh'
   const chineseLabels = labelsOf(page.component({ view: 'page', form }))
-  check(JSON.stringify(chineseLabels) === JSON.stringify(['决策者', 'Jev URL', 'Jev Model', 'Jev 密钥']),
+  check(JSON.stringify(chineseLabels) === JSON.stringify(['连接方式', 'attach 共享', '决策者', 'Jev URL', 'Jev Model', 'Jev 密钥']),
     `the same rows read Chinese once the active language changes (got ${chineseLabels.join(', ')})`)
-  check(hintsOf(page.component({ view: 'page', form }))[0]?.startsWith('Jev 常开'),
+  check(hintsOf(page.component({ view: 'page', form }))[0]?.startsWith('launch：插件自己启动'),
     'the hint follows the active language as well')
   check(hintsOf(page.component({ view: 'page', form: undefined }))[0]?.includes('没有提供'),
     'the refusal follows the active language as well')
   locale.active = 'en'
-  check(labelsOf(card.component({ view: 'page' }))[0] === 'Decider',
+  check(labelsOf(card.component({ view: 'page' }))[0] === 'Connection',
     'the bundle page card, which renders outside the shell\u2019s `t` prop, reads the same dictionary')
 
   // A text field commits on blur, not on every keystroke.
@@ -308,6 +309,38 @@ async function checkSwitchForm() {
     operations: [{ op: 'set', path: ['jev', 'decider'], value: 'chat' }],
     revision: 3,
   }), 'a switch on the bundle page writes through the settings mirror with the revision it read')
+
+  // The connection switches: how a Session reaches a browser at all, and the one pair the schema
+  // refuses. Both are live fields, so a write here is the switch a person expects it to be.
+  const connectionWrites = []
+  const connectionForm = value => ({
+    state: { status: 'ready', writable: true, revision: 9, value },
+    mutate: (operations, revision) => { connectionWrites.push({ operations, revision }); return Promise.resolve(true) },
+  })
+  const attached = connectionForm({ mode: 'attach', attachSharing: 'shared', jev: { typesafe: {} } })
+  const modeMenu = controlFor(page.component({ view: 'page', form: attached }), 'mode')
+    .find(node => typeof node.props?.onSelect === 'function')
+  check(JSON.stringify(modeMenu.props.items.map(item => item.id)) === JSON.stringify(['launch', 'attach'])
+    && modeMenu.props.selectedId === 'attach',
+  'the connection switch offers launch and attach, and shows the mode in force')
+  modeMenu.props.onSelect('launch')
+  check(JSON.stringify(connectionWrites[0]?.operations) === JSON.stringify([
+    { op: 'set', path: ['mode'], value: 'launch' },
+    { op: 'set', path: ['attachSharing'], value: 'exclusive' },
+  ]), 'moving back to launch carries the sharing reset in the same write, so the pair is never refused')
+  check(connectionWrites[0].revision === 9, 'the connection write carries the revision the page read')
+
+  // Sharing describes an attached browser only, so in launch mode the row keeps its stored value but
+  // offers no menu: the schema would reject every value but the one already stored.
+  const launched = connectionForm({ mode: 'launch', attachSharing: 'exclusive', jev: { typesafe: {} } })
+  const sharingControl = controlFor(page.component({ view: 'page', form: launched }), 'attachSharing')
+  check(sharingControl.find(node => typeof node.props?.onSelect === 'function') === undefined,
+    'the sharing row offers no menu while the mode launches its own browser')
+  check(sharingControl.find(node => node.type === 'button')?.props.disabled === true,
+    'the sharing row still states its stored value, on a control that refuses the change')
+  const sharingHints = hintsOf(rowFor(page.component({ view: 'page', form: launched }), 'attachSharing'))
+  check(sharingHints[0]?.startsWith('Only meaningful in attach mode'),
+    'the sharing row says why it is locked instead of looking broken')
 }
 
 /** The host route as the shell reaches it: same handler, a real HTTP server. */
