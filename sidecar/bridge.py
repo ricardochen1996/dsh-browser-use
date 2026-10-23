@@ -84,6 +84,8 @@ EVAL_TIMEOUT_MS = 30000
 EVAL_TIMEOUT_MAX_MS = 120000
 # How long a launched browser has to publish its DevTools endpoint before the run fails.
 BROWSER_BOOT_SECONDS = 25
+# How much of what the browser printed a failed launch quotes back: its own explanation, not a log.
+BROWSER_OUTPUT_LINES = 12
 DEFAULT_PROFILE = Path.home() / ".jev-ultrafast" / "browser"
 
 
@@ -171,9 +173,15 @@ def devtools_endpoint(port, timeout=2.0):
     The endpoint is read over HTTP rather than from the profile's ``DevToolsActivePort`` file: Chrome
     publishes that file for the profile it was started with, and a host process may not be allowed to
     read the profile the user browses with.
+
+    This asks a port on this machine, so the request is made without a proxy. A system or environment
+    proxy that does not exclude 127.0.0.1 answers for a browser listening perfectly well, and the
+    answer is indistinguishable from a browser that never started: a healthy launch then fails as a
+    timeout. ``discover_local_browser`` reaches its endpoint over a raw socket for the same reason.
     """
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=timeout) as answer:
+        with opener.open(f"http://127.0.0.1:{port}/json/version", timeout=timeout) as answer:
             return json.loads(answer.read().decode("utf-8")).get("webSocketDebuggerUrl")
     except (OSError, ValueError):
         return None
@@ -323,12 +331,23 @@ class AdoptedBrowser:
         raise TimeoutError("the adopted browser did not stop")
 
 
-def start_browser(command, port, data_dir):
-    """Start one browser process and wait for the DevTools endpoint it publishes."""
+def start_browser(command, port, data_dir, output=None):
+    """Start one browser process and wait for the DevTools endpoint it publishes.
+
+    ``output`` is the file the browser's own stdout and stderr are written to. That stream is where a
+    browser that runs but never publishes its endpoint explains itself — a port it could not take, a
+    sandbox it could not enter, a policy that forbids remote debugging — and nothing else records it.
+    """
     clear_stale_singleton(data_dir)
-    process = subprocess.Popen(
-        command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True
-    )
+    log = open(output, "ab") if output else None
+    try:
+        process = subprocess.Popen(
+            command, stdout=log or subprocess.DEVNULL, stderr=log or subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    finally:
+        if log is not None:
+            log.close()  # the child holds its own descriptor; this one only opened the file
     deadline = time.monotonic() + BROWSER_BOOT_SECONDS
     while time.monotonic() < deadline:
         if process.poll() is not None:
@@ -339,6 +358,57 @@ def start_browser(command, port, data_dir):
         time.sleep(0.2)
     process.terminate()
     return None, process
+
+
+def browser_output_path(data_dir):
+    """Where one launch records the browser's own output: beside the profile it was given."""
+    return Path(data_dir) / "browser-output.log"
+
+
+def recorded_devtools_port(data_dir):
+    """The port the browser recorded for its DevTools endpoint, or None when it never got that far."""
+    try:
+        lines = browser_output_path(data_dir).with_name("DevToolsActivePort").read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()
+    except OSError:
+        return None
+    first = lines[0].strip() if lines else ""
+    return int(first) if first.isdigit() else None
+
+
+def browser_said(output, limit=BROWSER_OUTPUT_LINES):
+    """The last lines the browser printed, which is where a refused launch states why."""
+    try:
+        lines = Path(output).read_text(encoding="utf-8", errors="replace").splitlines()
+    except (OSError, TypeError):
+        return []
+    return [line.strip() for line in lines if line.strip()][-limit:]
+
+
+def launch_diagnosis(command, data_dir, port, output):
+    """What a failed launch left behind, in the words a person needs to act on it.
+
+    A plain "did not open a DevTools endpoint" is true and useless: it reads the same whether the
+    browser exited, refused the port, was blocked by a proxy on the probe, or never enabled remote
+    debugging. The command, the profile and the browser's own output tell those apart.
+    """
+    lines = [f"\n  launched {command[0]} on {data_dir} for port {port}"]
+    recorded = recorded_devtools_port(data_dir)
+    if recorded is None:
+        lines.append("  the profile records no DevTools port: the browser never enabled remote debugging")
+    elif recorded != port:
+        lines.append(f"  the profile records DevTools on port {recorded}, not {port}: the browser is up and "
+                     "listening elsewhere")
+    else:
+        lines.append(f"  the profile records DevTools on port {port}, the port this probe asked: the browser "
+                     "was up and the probe could not reach it")
+    said = browser_said(output)
+    if said:
+        lines.append("  the browser said: " + " | ".join(said))
+    elif output is not None:
+        lines.append(f"  the browser printed nothing (see {output})")
+    return "\n".join(lines)
 
 
 def launch_browser(executable, user_data_dir, port, headless):
@@ -370,9 +440,14 @@ def launch_browser(executable, user_data_dir, port, headless):
     if headless:
         command.append("--headless=new")
     command.append("about:blank")
+    output = browser_output_path(data_dir)
+    try:
+        output.write_bytes(b"")  # this launch's evidence only, not the previous session's
+    except OSError:
+        output = None  # a profile the browser can use but this process cannot write beside
     process = None
     for attempt in range(3):
-        endpoint, process = start_browser(command, port, data_dir)
+        endpoint, process = start_browser(command, port, data_dir, output)
         if endpoint is not None:
             return {"BU_CDP_WS": endpoint, "_process": process}
         if process.poll() is None:
@@ -388,7 +463,10 @@ def launch_browser(executable, user_data_dir, port, headless):
         )
     detail = f" (exit status {process.poll()})" if process is not None and process.poll() is not None \
         else f" within {BROWSER_BOOT_SECONDS}s"
-    raise BridgeError("no_browser", f"The browser did not open a DevTools endpoint{detail}.")
+    raise BridgeError(
+        "no_browser",
+        f"The browser did not open a DevTools endpoint{detail}.{launch_diagnosis(command, data_dir, port, output)}",
+    )
 
 
 def console_events(events, session):

@@ -4,10 +4,12 @@ The bridge is what the plugin's Node half drives, so these tests speak its proto
 browser and never open a real one. No paid APIs are called.
 """
 
+import http.server
 import io
 import json
 import os
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -258,7 +260,7 @@ def test_a_hand_off_to_another_browser_says_which_profile_is_taken(tmp_path, mon
             return 0
 
     monkeypatch.setattr(bridge, "running_endpoint", lambda data_dir: None)
-    monkeypatch.setattr(bridge, "start_browser", lambda command, port, data_dir: (None, HandedOff()))
+    monkeypatch.setattr(bridge, "start_browser", lambda command, port, data_dir, output=None: (None, HandedOff()))
     monkeypatch.setattr(bridge.time, "sleep", lambda seconds: None)  # the retry waits are not the subject
     with pytest.raises(bridge.BridgeError) as error:
         bridge.launch_browser(None, tmp_path / "profile", 1, False)
@@ -713,3 +715,90 @@ def test_serve_answers_in_order_and_stops_on_shutdown(monkeypatch, session):
     assert answers[2]["error"]["kind"] == "unknown_method"
     assert answers[3]["result"] == {"closed": True}
     assert answers[4]["result"] == {"bye": True}
+
+
+class Running:
+    """A browser process that is still up, which is what a launch waiting on its endpoint holds."""
+
+    def poll(self):
+        return None
+
+
+def failing_launch(message="", recorded_port=None):
+    """A launcher that behaves like a browser which runs but never publishes an endpoint."""
+
+    def start(command, port, data_dir, output=None):
+        if recorded_port is not None:
+            Path(data_dir, "DevToolsActivePort").write_text(f"{recorded_port}\n/devtools/browser/abc\n")
+        if message and output is not None:
+            Path(output).write_text(message)
+        return None, Running()
+
+    return start
+
+
+def test_a_launch_that_never_publishes_quotes_what_the_browser_printed(tmp_path, monkeypatch):
+    monkeypatch.setattr(bridge, "browser_executable", lambda configured: "chrome-under-test")
+    monkeypatch.setattr(bridge, "running_endpoint", lambda data_dir: None)
+    monkeypatch.setattr(bridge, "start_browser",
+                        failing_launch("DevTools remote debugging port 49312 is already in use\n"))
+    with pytest.raises(bridge.BridgeError) as error:
+        bridge.launch_browser(None, tmp_path / "profile", 49312, False)
+    message = str(error.value)
+    assert error.value.kind == "no_browser"
+    assert "The browser did not open a DevTools endpoint within 25s" in message
+    # The three facts a person needs: what was run, where, and what it said.
+    assert "chrome-under-test" in message and str(tmp_path / "profile") in message and "49312" in message
+    assert "port 49312 is already in use" in message
+
+
+def test_a_launch_that_never_publishes_names_the_port_the_profile_recorded(tmp_path, monkeypatch):
+    monkeypatch.setattr(bridge, "browser_executable", lambda configured: "chrome-under-test")
+    monkeypatch.setattr(bridge, "running_endpoint", lambda data_dir: None)
+    monkeypatch.setattr(bridge, "start_browser", failing_launch("", recorded_port=4711))
+    with pytest.raises(bridge.BridgeError) as error:
+        bridge.launch_browser(None, tmp_path / "profile", 4712, False)
+    assert "records DevTools on port 4711, not 4712" in str(error.value)
+
+
+def test_a_launch_without_a_recorded_port_says_remote_debugging_never_started(tmp_path, monkeypatch):
+    monkeypatch.setattr(bridge, "browser_executable", lambda configured: "chrome-under-test")
+    monkeypatch.setattr(bridge, "running_endpoint", lambda data_dir: None)
+    monkeypatch.setattr(bridge, "start_browser", failing_launch(""))
+    with pytest.raises(bridge.BridgeError) as error:
+        bridge.launch_browser(None, tmp_path / "profile", 4713, False)
+    assert "never enabled remote debugging" in str(error.value)
+
+
+def test_the_endpoint_probe_is_a_loopback_request_and_never_uses_a_proxy(monkeypatch):
+    """A proxy that does not exclude 127.0.0.1 must not answer for a browser that is listening."""
+
+    class Version(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = b'{"webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/browser/kept"}'
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *arguments):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Version)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        # The proxy is set to a port nothing answers on, and the bypass list is made to miss the
+        # loopback address, which is how a proxy that does not exclude it behaves on macOS.
+        for name in ("http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY"):
+            monkeypatch.setenv(name, "http://127.0.0.1:9")
+        monkeypatch.setattr(bridge.urllib.request, "proxy_bypass", lambda host: False)
+        assert bridge.devtools_endpoint(server.server_address[1]) == "ws://127.0.0.1:9222/devtools/browser/kept"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_the_probe_answers_none_while_a_browser_is_still_starting():
+    """Nothing listening is not an error: it is the state a launch spends 25s checking."""
+    assert bridge.devtools_endpoint(bridge.free_port(), timeout=0.2) is None
