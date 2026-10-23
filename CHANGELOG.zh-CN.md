@@ -11,13 +11,24 @@
 ### 新增
 
 - 配置页现在给出**连接方式**这一组，不再只有 Jev 的开关：**`mode`**（`launch` 由插件自己启动一个只属于本 Session 的浏览器，`attach` 驱动你已经在用的那一个），以及 `mode` 为 `attach` 时的 **`attachSharing`**（`exclusive` 把浏览器留给第一个活跃 Session，`shared` 让每个 Session 各开自己的标签页同时驱动）。两者在 `lib/config.js` 里都是 live 字段：Loader 会把改动提交进运行中插件持有的那个引用，下一次 `browser_open` 就按新值走——而一个 Session 已经打开的浏览器仍按它被打开时的模式继续，所以拨这个开关不会回头打断正在跑的浏览器。`launch` 模式下，共享那一行用一个锁定控件显示当前值（不弹菜单，schema 本来就会拒掉那一组），而把模式拨回 `launch` 时会在同一次写入里带上 `attachSharing: "exclusive"` 的重置——否则只写一半，人拿到的是拒绝而不是他想要的改动（`lib/client.js`；`test/inspector.mjs` 49 项检查，`test/plugin.mjs` 的表单字段集合现在也列出了这两项）。
+- `test/plugin.mjs` 通过插件打开一个本地评分表，检查动作表给出全部 12 个单字符格子、点其中一格真的到达页面、以及孤立的单字符仍然是文本——用随包的那一版引擎端到端验证。
+- `test/test_bridge.py`：无法按值返回的值报成带提示的 `js_error`（提示里给出 `JSON.stringify` 这条出路）；非有限 `timeout_ms` 会正常应答而不是结束 sidecar。
+- `browser_eval` 的回归检查现在真的在测它声称的东西：对象用例直接返回对象（而不是返回 `JSON.stringify` 的字符串，那只走到字符串分支）；“不产生观测”用下一次读取正好 `+1` 来证明，而不是拿两个“消耗了观测也照样成立”的数字比大小；`window` 会被检查成按文本返回。
+
+### 变更
+
+- 随包引擎升级到 **jev-ultrafast 0.1.1**（revision `50b319f`）：评分格（无 role、无 tabindex、无 href、单字符、成组出现的格子）现在是 `CLICK` 目标，而页面上孤零零的一个字符仍然只是文本。演示页面的动作表不变（15 个动作、9 个可点），所以对没有这类格子的页面不增加噪声。引擎自己的守卫检查与测试套件覆盖了它，`bin/vendor_engine.py check` 逐文件证明 wheel 就是那个 revision。
+- 中英两份 README 改成：授权是**按连接**要一次，不是整个插件只弹一次——所有工具复用本 Session 的那一条连接，而 `browser_close` 之后再 `browser_open` 会起一个新的 daemon，attach 模式下那一次新连接会再问一次。
 
 ### 修复
 
 - 本机代理没有排除 `127.0.0.1` 的机器上，启动不再失败。等待浏览器 DevTools 端点的那次探测用 `urllib` 读 `http://127.0.0.1:<port>/json/version`，而 `urllib` 会套用本机代理设置；于是替它作答的代理让一个明明已经正常启动的浏览器，每一次 `browser_open` 都以「25 秒内没有打开 DevTools 端点」失败——25 秒、每一次都是，而该 Session 的 profile 目录里能看见浏览器起来并在写盘。这次探测是回环请求，现在改走完全不经过代理的 opener，和 `discover_local_browser` 早就用裸 socket 取端点是一个道理（`sidecar/bridge.py`）。
 - 启动失败现在会说出它能说的，而不只是等了多久：启动的是哪个可执行文件、哪个 profile、哪个端口、profile 的 `DevToolsActivePort` 里记录的端口，以及浏览器自己最后打印的几行。它的 stdout/stderr 以前直接进了 `DEVNULL`，而拒绝启动的原因恰好写在那里（`sidecar/bridge.py` 的 `launch_diagnosis`；`test/test_bridge.py` 新增 5 项离线检查，其中包括「代理替一个正在监听的浏览器作答」那一条）。
+- `browser_eval` 不再把“无法按值返回”的结果（`window`、循环引用对象、超过 Chrome 链长上限的值）变成失败的调用。Chrome 对这类情况返回的是协议错误而不是 `exceptionDetails`，sidecar 现在把它报成 `js_error` 并带上出路（`JSON.stringify`）。其他协议级失败也按文本返回，因为失败的调用正是把模型推向“换个客户端再试”的原因。
+- 会 await Promise 的 `browser_eval` 现在拿到的是覆盖表达式自身上限的请求期限，而不是普通调用的 `requestTimeoutMs`。profile 把请求上限调小时，以前会在 sidecar 还在干活时就拒绝这次调用，排在它后面的请求也跟着等。
+- JSON 里的 `1e400`（无穷大）作为 `timeout_ms` 时，现在和任何越界值一样被钳制，而不是抛 `OverflowError` 越过请求循环、把 sidecar 结束掉。
 
-_Commits: `7746bd2`（回环探测、启动失败的说明与它们的检查），本次提交（配置页的连接方式开关）。_
+_Commits: `7746bd2`（回环探测、启动失败的说明与它们的检查）、`89e22c5`（配置页的连接方式开关），以及随包引擎 0.1.1 与 `browser_eval` 修复那两个提交。_
 
 ## [0.7.1] - 2026-10-23
 

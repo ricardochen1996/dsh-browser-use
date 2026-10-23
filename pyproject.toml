@@ -18,7 +18,7 @@ dependencies = [
 # plugin installs it by itself on first load (`uv sync --frozen` into its own `.venv`), so a user's
 # machine needs uv and PyPI, never git or an engine checkout. To run an engine clone instead, set
 # config.projectPath.
-jev-ultrafast = { path = "vendor/jev_ultrafast-0.1.0-py3-none-any.whl" }
+jev-ultrafast = { path = "vendor/jev_ultrafast-0.1.1-py3-none-any.whl" }
 
 [dependency-groups]
 dev = ["pytest>=8.4,<9", "ruff>=0.14,<1"]

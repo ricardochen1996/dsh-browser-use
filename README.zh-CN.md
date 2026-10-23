@@ -143,7 +143,7 @@ Without a target: WAIT
 ### 7. 不碰你正在用的浏览器
 插件默认自起一个专用 Chrome 实例。它不碰你个人 Chrome 的 profile，所以不会出现 Chrome 144+ 那个"允许远程调试"的授权弹窗，更不会把你的登录态卷进自动化。需要接自己的浏览器时，显式切到 `mode: attach`：
 
-- **接你正在用的 Chrome（不填 `cdpEndpoint`）**：在那个 Chrome 里打开 `chrome://inspect/#remote-debugging`，允许远程调试；插件通过 Chrome 写在 profile 里的 `DevToolsActivePort` 自动找到它，在里面新开一个标签页干活，登录态直接可用。macOS 下这个文件受隐私保护，**运行 DSH 的 App 需要"完全磁盘访问权限"**（系统设置 → 隐私与安全性 → 完全磁盘访问权限，授权后重启 DSH），否则会明确报 `no_permission`。每个 DSH Session 第一次连接时 Chrome 会弹一次「允许远程调试？」，点允许即可——这也是插件唯一会引发的弹窗：所有工具（含 `browser_eval`）都复用那一条连接。不要对同一个 Chrome 再开自己的 CDP 客户端（裸 websocket、puppeteer/playwright 脚本、另一个 harness daemon）：Chrome 144+ 按连接分别授权，第二个客户端就是第二张弹窗；弹窗还挂着时重试，只会再多一张，而不是替换掉原来那张。插件只关自己开的标签页，结束时不会关你的浏览器。引擎直接用连接层为本次运行建好的那个标签页，不会再额外开空白页；你自己打开的空白新标签页也不会被关。
+- **接你正在用的 Chrome（不填 `cdpEndpoint`）**：在那个 Chrome 里打开 `chrome://inspect/#remote-debugging`，允许远程调试；插件通过 Chrome 写在 profile 里的 `DevToolsActivePort` 自动找到它，在里面新开一个标签页干活，登录态直接可用。macOS 下这个文件受隐私保护，**运行 DSH 的 App 需要"完全磁盘访问权限"**（系统设置 → 隐私与安全性 → 完全磁盘访问权限，授权后重启 DSH），否则会明确报 `no_permission`。每个 DSH Session 第一次连接时 Chrome 会弹一次「允许远程调试？」，点允许即可——插件是**按连接**要一次授权，不是按工具：所有工具（含 `browser_eval`）都复用那一条连接；而 `browser_close` 之后再 `browser_open` 会起一个新 daemon，attach 模式下那一次新连接还会再问一次。不要对同一个 Chrome 再开自己的 CDP 客户端（裸 websocket、puppeteer/playwright 脚本、另一个 harness daemon）：Chrome 144+ 按连接分别授权，第二个客户端就是第二张弹窗；弹窗还挂着时重试，只会再多一张，而不是替换掉原来那张。插件只关自己开的标签页，结束时不会关你的浏览器。引擎直接用连接层为本次运行建好的那个标签页，不会再额外开空白页；你自己打开的空白新标签页也不会被关。
 - **接一个专用的调试 Chrome（填 `cdpEndpoint`）**：`http://127.0.0.1:9333` 或 `ws://…/devtools/browser/…`，见下方配置表。
 
 attach 模式是**在 profile 加载时**就检查的，而不是等到第一次调用浏览器工具：填了 `cdpEndpoint` 就问它的 `/json/version`（`ws://` 地址则只问端口上有没有人在听），没填就按引擎找它的方式去找你正在用的 Chrome。检查通过，`browser_doctor` 才会报 `Status: ready`；不通过，加载日志里直接带着修复办法 —— `node bin/doctor.mjs --mode attach` 可以在终端里问同一个问题。这项检查只读 Chrome 已经公开的东西：不开页面，也不会等任何弹窗。
@@ -299,7 +299,7 @@ Problems :
 
 ```text
 Engine   : <plugin>/.venv/bin/python (Python 3.12.14, chosen by this package’s environment)
-           jev_ultrafast 0.1.0 at <plugin>/.venv/lib/python3.12/site-packages/jev_ultrafast
+           jev_ultrafast 0.1.1 at <plugin>/.venv/lib/python3.12/site-packages/jev_ultrafast
            browser-harness 0.1.13
 Install  : installed into <plugin>/.venv with pip (Python 3.12.14) in 7s; pillow is skipped (this plugin never calls the helpers that use it)
 Sidecar  : <plugin>/sidecar/bridge.py
@@ -440,9 +440,9 @@ npm run check             # lint、Python 单测、发版元数据 + Node 检查
 uv run pytest             # sidecar 协议与发版门禁单测（离线）
 uv run python test/check_bridge.py   # 10 项：sidecar 端到端（stdio + 真浏览器）
 uv run python test/check_tabs.py     # 5 项：一次启动只留一个标签页
-node test/plugin.mjs      # 123 项：34 工具、拒绝与提示词规则（真浏览器）+ 3 元素状态渲染 + 4 缺引擎诊断 + 29 引擎配置 + 3 attach 独占 + 9 attach 共享 + 6 接你的 Chrome + 17 attach 预检 + 10 设置页表单与即时生效 + 5 sidecar 环境 + 3 在途取消
+node test/plugin.mjs      # 131 项：38 工具、拒绝与提示词规则（真浏览器）+ 3 元素状态渲染 + 4 缺引擎诊断 + 29 引擎配置 + 3 attach 独占 + 9 attach 共享 + 6 接你的 Chrome + 17 attach 预检 + 14 设置页表单与即时生效 + 5 sidecar 环境 + 3 在途取消
 node test/delegation.mjs  # 100 项：对话只见 browser_task(+_status)、常驻子 agent 接收后续任务、释放/重启后恢复并重新挂工具、状态与等待（结算、超时、用户发话、子 agent 来信、取消、静默退出）、fresh 与丢失替换、一次性委派、取消与回退
-node test/inspector.mjs   # 43 项：Web 端注册 + 配置表单的注册键/字段/写回 + host 路由 + 页面可渲染
+node test/inspector.mjs   # 49 项：Web 端注册 + 配置表单的注册键/字段/写回 + host 路由 + 页面可渲染
 node test/provision.mjs   # 93 项：14 uv 查找与失败诊断 + 24 安装（同时只跑一次、失败→修复、重试窗口、没有 uv、超时）+ 23 Python 路径（探测、venv、按哈希 pip、wheel、索引、回退）+ 21 经引擎检查的安装与报告 + 4 取消等待 + 7 doctor 工具与命令行（假 uv 与假 python，不下载）
 npm run release:check     # 核对 npm/Python/uv.lock 版本、发布元数据、随包引擎（wheel、清单、lock 哈希）与 vendor/requirements.txt 一致
 npm run release:pack      # 检查并独立安装实际 npm 包，让它自己构建引擎环境，输出到 dist/，不会发布
