@@ -28,7 +28,7 @@ Versions before 0.6.2 were reconstructed from this repository's git history (the
 - A `browser_eval` that awaits a promise gets a request deadline that covers the expression's own bound instead of a plain call's `requestTimeoutMs`. A profile with a short request cap used to reject the call while the sidecar was still working, and the request behind it waited on that work.
 - A `timeout_ms` that JSON carries as `1e400` (infinity) is clamped like any other out-of-range value, instead of raising `OverflowError` past the request loop and ending the sidecar.
 
-_Commits: `7746bd2` (the loopback probe, the launch diagnosis and their checks), `89e22c5` (the connection switches in the Settings page), and the commits that bundle jev-ultrafast 0.1.1 and fix `browser_eval`._
+_Commits: `7746bd2` (the loopback probe, the launch diagnosis and their checks), `89e22c5` (the connection switches in the Settings page), `1de55e2` (the `browser_eval` fixes), `7286dcc` (the bundled engine and these notes), and this release commit._
 
 ## [0.7.1] - 2026-10-23
 
