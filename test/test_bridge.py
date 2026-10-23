@@ -73,9 +73,13 @@ class FakeBrowser:
     def call(self, method, **params):
         if method == "Runtime.evaluate":
             # The one seam an expression crosses; a reply is keyed by the expression itself, so a
-            # test says what the page would answer without a page.
+            # test says what the page would answer without a page. An exception value is raised
+            # instead, which is how a protocol-level failure arrives from the engine.
             self.evaluated.append(params)
-            return self.replies.get(params["expression"], {"result": {"type": "undefined"}})
+            reply = self.replies.get(params["expression"], {"result": {"type": "undefined"}})
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
         assert method == "Page.captureScreenshot"
         return {"data": "anBlZw=="}
 
@@ -356,6 +360,29 @@ def test_evaluate_answers_text_the_stdio_protocol_can_carry(session):
     session.browser.replies["weird"] = {"result": {"type": "string", "value": "\ud800"}}
     result = call(session, "evaluate", expression="weird")
     result["text"].encode("utf-8")  # a lone surrogate would raise here, on the request that carried it
+
+
+def test_evaluate_reports_a_value_that_cannot_cross_by_value_as_a_js_error(session):
+    """`window` and a cyclic object answer with a protocol error, not exceptionDetails.
+
+    That is the expression's problem and it has a way out, so it must not surface as a browser
+    failure: a failed call is what sends a model looking for another client to try it in.
+    """
+    session.browser.replies["window"] = RuntimeError(
+        "{'code': -32000, 'message': 'Object reference chain is too long'}"
+    )
+    error = failure(session, "evaluate", expression="window")
+    assert error["kind"] == "js_error"
+    assert "cannot be returned by value" in error["message"] and "JSON.stringify" in error["message"]
+    assert session.browser is not None and session.page is not None
+
+
+def test_a_non_finite_timeout_is_a_default_not_a_dead_sidecar(session):
+    """`1e400` is valid JSON and parses to infinity; int(inf) raises OverflowError."""
+    assert bridge.evaluate_timeout(float("inf")) == bridge.EVAL_TIMEOUT_MS
+    assert bridge.evaluate_timeout(1e400) == bridge.EVAL_TIMEOUT_MS
+    result = call(session, "evaluate", expression="1", timeout_ms=1e400)
+    assert result["text"] == "undefined"  # the request answered instead of ending the process
 
 
 def test_evaluate_timeout_is_clamped_to_the_cap_and_the_default():

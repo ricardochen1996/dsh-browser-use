@@ -160,20 +160,25 @@ async function main() {
     check(console_.text.startsWith('Page '), 'console output is reported for the page this Session drives')
 
     // browser_eval is the answer to "a model needs a programmatic read": it must be answered on the
-    // Session's own connection, produce no observation, and report a throw as text rather than as a
-    // failed call — a tool failure is what sends a model looking for another CDP client.
+    // Session's own connection, consume no observation number, and report what cannot be returned as
+    // text rather than as a failed call — a failed call is what sends a model looking for another
+    // CDP client. The +1 below is the whole point: an evaluation that took an observation number
+    // would make the next read +2.
+    const preEval = await run('browser_page', {})
     const evaluated = await run('browser_eval', { expression: 'document.title' })
     check(/Casa Flora/u.test(evaluated.text), 'browser_eval returns the value the page holds')
-    check(evaluated.observation === undefined, 'browser_eval produces no observation of its own')
     const counted = await run('browser_eval', { expression: "document.querySelectorAll('h1').length" })
     check(/returned 1 character/u.test(counted.text) && /^1$/mu.test(counted.text),
       'a number comes back as the digits it is')
-    const structured = await run('browser_eval', { expression: "JSON.stringify({ links: document.querySelectorAll('a').length })" })
-    check(/"links":\d+/u.test(structured.text), 'an object comes back as JSON')
+    const structured = await run('browser_eval', { expression: "({ links: document.querySelectorAll('a').length })" })
+    check(/^\{"links": \d+\}$/mu.test(structured.text), 'an object comes back as JSON, not as a string')
     const thrown = await run('browser_eval', { expression: 'null.boom' })
     check(/threw/u.test(thrown.text), 'a throwing expression is reported as text, not as a failed call')
+    const cyclic = await run('browser_eval', { expression: 'window' })
+    check(/cannot cross the wire by value/u.test(cyclic.text),
+      'a value that cannot be returned by value is text too, not a failed call')
     const reread = await run('browser_page', {})
-    check(reread.observation > detail.observation, 'a page read after an evaluation is a new observation')
+    check(reread.observation === preEval.observation + 1, 'an evaluation consumes no observation number')
 
     const before = detail.observation
     const closed = await run('browser_close', {})
@@ -182,6 +187,28 @@ async function main() {
     check(reopened.observation > before, 'a browser tool after a close opens a fresh browser and a new observation')
     const orphan = await run('browser_act', { observation: before, operation: 'CLICK', target: '5' })
     check(orphan.text.startsWith('Refused:'), 'an observation from the closed browser cannot be acted on')
+
+    // The engine offers a rating grid: one-character cells with no role, tabindex or href. A person
+    // clicks them all day, so the table has to as well — and a lone character on the page must stay
+    // text. This is the revision the package bundles, exercised through the plugin.
+    const grid = 'data:text/html;charset=utf-8,' + encodeURIComponent(`<!doctype html><title>Rating</title>
+<style>.cells{display:flex}.score{display:inline-block;width:48px;height:28px;text-align:center;cursor:pointer}</style>
+<ul style="list-style:none"><li style="display:flex;align-items:center;gap:8px">
+  <span>Ann</span><a href="#ann">Open</a>
+  <div class="cells">${['?', '1', '2', '3', '4', '5'].map(text => `<p class="score" onclick="window.scored=this.textContent.trim()">${text}</p>`).join('')}</div>
+</li><li style="display:flex;align-items:center;gap:8px">
+  <span>Bo</span><a href="#bo">Open</a>
+  <div class="cells">${['?', '1', '2', '3', '4', '5'].map(text => `<p class="score" onclick="window.scored=this.textContent.trim()">${text}</p>`).join('')}</div>
+</li></ul><p id="lone">x</p>`)
+    const rated = await run('browser_open', { url: grid })
+    const cells = rated.text.split('\n').filter(line => /^\[\d+\] button [?,1-5] — CLICK$/u.test(line))
+    check(cells.length === 12, `a rating grid offers its twelve cells (got ${cells.length})`)
+    check(!/^\[\d+\] button x — CLICK$/mu.test(rated.text), 'a lone character stays text')
+    const four = rated.text.match(/^\[(\d+)\] button 4 — CLICK$/mu)
+    const scored = await run('browser_act', { observation: rated.observation, operation: 'CLICK', target: four[1] })
+    check(scored.text.includes('Executed CLICK'), 'a rating cell is clickable')
+    const recorded = await run('browser_eval', { expression: 'window.scored' })
+    check(/^4$/mu.test(recorded.text), 'clicking a rating cell reaches the page')
   } finally {
     await dispose()
     // A browser that was just asked to stop may still be flushing its profile; the temp directory is

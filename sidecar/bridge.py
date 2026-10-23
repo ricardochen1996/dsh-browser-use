@@ -82,6 +82,11 @@ EVAL_EXCEPTION_TEXT = 2000
 # An expression that awaits a promise must not hold the sidecar (and the request behind it) forever.
 EVAL_TIMEOUT_MS = 30000
 EVAL_TIMEOUT_MAX_MS = 120000
+# Runtime.evaluate answers with a protocol error, not exceptionDetails, when returnByValue cannot
+# serialize the value (a cyclic object, window, a chain over Chrome's limit). It is the expression's
+# problem and has a way out, so it is reported as js_error rather than as a browser failure.
+UNSERIALIZABLE = ("object reference chain is too long", "object couldn't be returned by value",
+                  "value is unserializable", "an object could not be returned")
 # How long a launched browser has to publish its DevTools endpoint before the run fails.
 BROWSER_BOOT_SECONDS = 25
 # How much of what the browser printed a failed launch quotes back: its own explanation, not a log.
@@ -563,10 +568,14 @@ def engine_environment(values, endpoint=False):
 
 
 def evaluate_timeout(value):
-    """How long an awaitPromise expression may run, in the CDP's own milliseconds, clamped."""
+    """How long an awaitPromise expression may run, in the CDP's own milliseconds, clamped.
+
+    ``1e400`` is valid JSON and parses to infinity, which ``int`` refuses with ``OverflowError`` —
+    an exception this far from the request would otherwise end the whole sidecar.
+    """
     try:
         timeout = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return EVAL_TIMEOUT_MS
     return max(1000, min(timeout, EVAL_TIMEOUT_MAX_MS))
 
@@ -713,7 +722,14 @@ class Session:
             self.browser, self.page, self.history = None, None, []
             raise BridgeError("lost_session", str(error)) from None
         except RuntimeError as error:
-            raise BridgeError("browser_error", str(error)) from None
+            message = str(error)
+            if any(hint in message.lower() for hint in UNSERIALIZABLE):
+                raise BridgeError(
+                    "js_error",
+                    f"the value cannot be returned by value ({message}). Return a JSON-serialisable copy "
+                    "instead, for example JSON.stringify(expression)",
+                ) from None
+            raise BridgeError("browser_error", message) from None
         if response.get("exceptionDetails"):
             raise BridgeError("js_error", exception_text(response["exceptionDetails"]))
         text = evaluated(response.get("result", {}))
