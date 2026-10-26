@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 Versions before 0.6.2 were reconstructed from this repository's git history (there was no changelog before 0.6.2): each entry names the commits it was derived from, and every release date is the date of its tagged commit. 0.6.2 is the first release written down as it was made.
 
+## [Unreleased]
+
+### Added
+
+- The bundle page detects its own updates. A **Check for updates** control now sits in the page's actions row beside Uninstall: it asks the Market's public update API (`dshmarket`'s `UPDATE-API-V1`) for the newest published release, turns into **Update to vX.Y.Z** when one exists, follows the accepted install's progress, and reports the outcome — a UI refresh (`refreshRequired`), a DSH restart, a refusal code such as `AGENTS_RUNNING`, or the release-age hold that offers a **Force update** retry. Endpoints, envelope and restart ownership are discovered from the capabilities answer, so a Host that does not mount the Market simply shows no control (`lib/client.js`; 13 new offline checks in `test/inspector.mjs`, taking the file to 63).
+
+### Fixed
+
+- The Settings page's form no longer squeezes its switches. Each row is now a two-column grid whose second track is a fixed 280px control column: the label and the control share one line, the hint sits under the label, and a select ellipsizes instead of wrapping inside its own height. Before, a long hint's `max-content` width made the flex row shrink the control, so both connection switches drew about 120px wide with two- and three-line labels detached from their rows — the misalignment the form showed in both languages. The connection rows traded the mixed "attach 共享" / "Attach sharing" label for "共享方式" / "Sharing", every hint was shortened, the control stacks under its label below 720px, and a select now draws the shell's focus ring. The text fields also line up with the selects now: the Input primitive's wrapper adds padding and a border outside its width, so the form's `border-box` declaration makes a 280px text field exactly as wide and high as a 280px select instead of 297×33. The injected rules are also rewritten in place rather than skipped when the style tag already exists, because DSH can hot-swap a changed client bundle into a live page and the new markup used to draw with the previous bundle's rules. `test/inspector.mjs` adds a structural check that every row keeps its control in that column, taking the file to 50 checks, and both READMEs' settings-page section now lists the connection switches where they belong.
+
 ## [0.8.0] - 2026-10-23
 
 ### Added

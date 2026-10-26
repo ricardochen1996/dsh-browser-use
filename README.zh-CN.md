@@ -181,6 +181,8 @@ dsh plugin --profile desktop add @ricardochen1996/dsh-browser-use
 node /path/to/node_modules/@ricardochen1996/dsh-browser-use/bin/doctor.mjs --install
 ```
 
+**页面里更新：**装好之后，**侧边栏 → 插件**里这个插件的页面会在「卸载」旁多出一个**检查更新**控件。它通过插件市场的公开更新 API（`dshmarket` 的 `UPDATE-API-V1`）查询 npm 上的最新版本，有新版本就变成**更新到 vX.Y.Z**，随后展示安装进度与结果——需要刷新界面、需要重启 DSH、被"有 agent 在跑"之类的理由拒绝，或是发布未满发布年龄限制时给出**强制更新**重试。没有挂载插件市场的 Host 没有这些路由，控件会自动隐藏；没有市场时仍可走 `dsh plugin --profile desktop add @ricardochen1996/dsh-browser-use@latest`。
+
 安装不放在 npm 的 `postinstall` 脚本里：DSH 安装插件时生命周期脚本默认被拦下，所以由插件在加载时自己装。npm 不会安装 Chrome。如果只是安装到 Node 项目而不是 DSH profile，可用 `npm install @ricardochen1996/dsh-browser-use`；这个命令本身不会把插件注册到 DSH。需要固定版本时，在上述包名后追加 `@0.5.1`。
 
 如果已经装了旧 scope 下的版本（`@weichen96/dsh-browser-use`，到 `0.5.0` 为止）或未发布的本地 `@rc/dsh-browser-use`，请先移除旧插件条目再安装 npm 包，不要同时启用两个 provider。内部 `id: dsh-browser-use` 和配置字段保持不变。profile 里仍把 `projectPath` 设为引擎 checkout 的，会继续用那个 checkout；删掉它就改用随包的引擎。
@@ -329,10 +331,12 @@ Status   : ready
 - **侧边栏「插件」→ 打开 `@ricardochen1996/dsh-browser-use`**：开关直接画在「包含的组件」上面（插件页自身的配置区）。
 - 同一页里 **`dsh-browser-use` 那一行的标题本身就是「配置」按钮**（带 `>` 箭头，无障碍名 `配置 @ricardochen1996/dsh-browser-use`），点开是同一套表单。
 
-表单刻意只有一个问题（外加它可能需要的那组端点），用 shell 自己的组件画成和其它插件一样的行式布局：
+表单先问本 Session 怎么连浏览器，再问由谁回答环路——用 shell 自己的组件画成和其它插件一样的行式布局：
 
 | 表单里的字段 | 说明 |
 | --- | --- |
+| `mode`（连接方式） | `launch` 由插件自己启动一个只属于本 Session 的浏览器；`attach` 驱动你正在用的 Chrome（需在 `chrome://inspect/#remote-debugging` 允许远程调试）。改动对下一次 `browser_open` 生效 |
+| `attachSharing`（共享方式） | 仅 `attach` 模式可选：`exclusive` 把浏览器留给第一个活跃 Session；`shared` 让每个 Session 各开自己的标签页。`launch` 模式下这一行锁定在已存值 |
 | `jev.decider` | 由谁回答环路：**Jev**（默认，调下面的端点）或**文本模型**（完全不需要 Jev key） |
 | `jev.typesafe.baseURL` / `.model` | Jev 端点与模型名；由文本模型决策时不生效 |
 | `jev.typesafe.apiKey` | **Jev 的密钥本身**，直接粘进一个"只写不读"的输入框（Host 不会把 secret 发回来，所以框里永远显示为空；留空 = 保持已存的 key）。**留空就直接花主会话路由的 key** |
@@ -341,9 +345,9 @@ Status   : ready
 
 **文本模型同样不做表单字段**：它就是主会话自己的路由（端点、模型、key、headers），并**关闭推理**——为了往输入框里填一个值，再问你第二个模型该发到哪儿，只会多一个填错的机会。profile patch 里仍可覆盖 `jev.textModel.*`（模型、推理开关、追加 headers）与 `jev.source`，只是表单不问。
 
-`jev.decider` 与 `jev.typesafe.apiKey` 都是 `.volatile()` 的：改完当场生效（下次 `browser_goal` 或带 `intent` 的 `browser_act` 就用新值）。key 以 `role('secret')` 提交，永远不出现在任何表单响应里：输入框每次都是空的，留空表示不动已存的 key，写入成功会显示「已写入」。想**删掉**已存的 key，就从 profile patch 里删掉那一行。
+`mode`、`attachSharing`、`jev.decider` 与 `jev.typesafe.apiKey` 都是 `.volatile()` 的：改完当场生效（下次 `browser_open`、`browser_goal` 或带 `intent` 的 `browser_act` 就用新值）。key 以 `role('secret')` 提交，永远不出现在任何表单响应里：输入框每次都是空的，留空表示不动已存的 key，写入成功会显示「已写入」。想**删掉**已存的 key，就从 profile patch 里删掉那一行。
 
-**其余开关都在 profile patch 里改**（改完 DSH 会重挂插件，和以前一样）：`mode`、`attachSharing`、`cdpEndpoint`、`executablePath`、`userDataDir`、`headless`、`allowScreenshots`、`allowEval`、`requestTimeoutMs`、`delegate`、`delegateMode`、`subagentProvider`、`maxDepth`、`projectPath`、`pythonPath`、`reserveBrowserUseSlot`、`progress`、`progressIntervalMs`、`jev.enabled`、`jev.typesafe.fallbackURL`、`jev.typesafe.apiKeyEnv`、`jev.source`、`jev.textModel.baseURL`、`jev.textModel.model`、`jev.textModel.reasoning`、`jev.textModel.headers`、`jev.textModel.apiKey` / `.apiKeyEnv`。它们决定**有哪些工具**、跑哪个解释器、占不占组合槽位、子 agent 干活时话多话少，或者描述一个本不该让人操心的文本模型——做成表单字段等于承诺一个做不到的"立即生效"。`jev.typesafe.apiKeyEnv` 仍留给"不想把 key 写进 profile 文件、只想**指名**一份已存凭据（Models 页存的 DSH 凭据，或环境变量名）"的 patch；往这一项里直接粘密钥会被拒绝，并给出该写哪儿的提示。
+**其余开关都在 profile patch 里改**（改完 DSH 会重挂插件，和以前一样）：`cdpEndpoint`、`executablePath`、`userDataDir`、`headless`、`allowScreenshots`、`allowEval`、`requestTimeoutMs`、`delegate`、`delegateMode`、`subagentProvider`、`maxDepth`、`projectPath`、`pythonPath`、`reserveBrowserUseSlot`、`progress`、`progressIntervalMs`、`jev.enabled`、`jev.typesafe.fallbackURL`、`jev.typesafe.apiKeyEnv`、`jev.source`、`jev.textModel.baseURL`、`jev.textModel.model`、`jev.textModel.reasoning`、`jev.textModel.headers`、`jev.textModel.apiKey` / `.apiKeyEnv`。它们决定**有哪些工具**、跑哪个解释器、占不占组合槽位、子 agent 干活时话多话少，或者描述一个本不该让人操心的文本模型——做成表单字段等于承诺一个做不到的"立即生效"。`jev.typesafe.apiKeyEnv` 仍留给"不想把 key 写进 profile 文件、只想**指名**一份已存凭据（Models 页存的 DSH 凭据，或环境变量名）"的 patch；往这一项里直接粘密钥会被拒绝，并给出该写哪儿的提示。
 
 改完一次之后，下面的 YAML 写法仍然有效（也是 `projectPath` 这类字段唯一的入口）：
 
@@ -409,14 +413,14 @@ Status   : ready
 | --- | --- | --- |
 | `projectPath` | 空（用随包引擎，装在本包的 `.venv`，自动安装） | 改用的引擎 checkout；设置后只接受从这里导入引擎的解释器，插件也不再安装任何东西 |
 | `pythonPath` | 自动 | 指定一个已经能 import `jev_ultrafast` 的解释器；设置后只试它，插件也不再安装任何东西 |
-| `mode` | `launch` | `launch` 自起浏览器；`attach` 接已在运行的浏览器 |
-| `attachSharing` | `exclusive` | `attach` 模式下外部浏览器归谁：`exclusive` 一次只留给一个 live Session，第二个被拒绝；`shared` 允许所有 live Session 同时驱动它，各用各自的 daemon 与标签页，关掉自己的浏览器只关自己的标签页。`launch` 模式不接受 `shared`——每个 Session 本来就各有浏览器 |
+| `mode` ✎ | `launch` | `launch` 自起浏览器；`attach` 接已在运行的浏览器 |
+| `attachSharing` ✎ | `exclusive` | `attach` 模式下外部浏览器归谁：`exclusive` 一次只留给一个 live Session，第二个被拒绝；`shared` 允许所有 live Session 同时驱动它，各用各自的 daemon 与标签页，关掉自己的浏览器只关自己的标签页。`launch` 模式不接受 `shared`——每个 Session 本来就各有浏览器 |
 | `cdpEndpoint` | — | `attach` 模式的 DevTools 地址（`http(s)://` 或 `ws(s)://`）；留空则自动接你正在用、开了 `chrome://inspect` 远程调试的 Chrome |
 | `executablePath` | 系统 Chrome | 启动哪个浏览器 |
 | `userDataDir` | 每 Session 一个（`~/.jev-ultrafast/browser/<session>`） | 专用 profile 目录 |
 | `headless` | `false` | 无窗口启动 |
 | `reserveBrowserUseSlot` | `true` | 占用 `ctx.browserUse` 单例槽（该服务被挂载时） |
-| `jev.enabled` ✎ | `false` | 开放 `browser_goal` 与 `browser_act` 的 `intent`（花模型额度）；旧名 `allowGoalMode` |
+| `jev.enabled` | `true` | 开放 `browser_goal` 与 `browser_act` 的 `intent`（花模型额度）；没有表单字段——设置页没有这个开关；旧名 `allowGoalMode` |
 | `jev.decider` ✎ | `typesafe` | 谁回答环路里的问题：`typesafe` 调下面那个端点；`chat` 在本地起引擎的 chat 决策端点、由文本模型回答，不需要 Jev key |
 | `jev.typesafe` | 引擎默认 | Jev 端点：`baseURL`、`model` ✎、密钥本身 `apiKey` ✎（表单里那个只写不读的密钥框；`apiKeyEnv` 则是指名一份凭据，只在 YAML；留空 = 花主会话路由的 key）以及 `fallbackURL`（只在 YAML）。`decider: chat` 时不使用 |
 | `jev.source` | `session` | **文本模型**从哪来：`session`（对话自己的路由）或 `custom`（用下面的 `jev.textModel` 端点与 key）。不做表单字段：表单的简单用法就是默认值 |
@@ -442,7 +446,7 @@ uv run python test/check_bridge.py   # 10 项：sidecar 端到端（stdio + 真�
 uv run python test/check_tabs.py     # 5 项：一次启动只留一个标签页
 node test/plugin.mjs      # 131 项：38 工具、拒绝与提示词规则（真浏览器）+ 3 元素状态渲染 + 4 缺引擎诊断 + 29 引擎配置 + 3 attach 独占 + 9 attach 共享 + 6 接你的 Chrome + 17 attach 预检 + 14 设置页表单与即时生效 + 5 sidecar 环境 + 3 在途取消
 node test/delegation.mjs  # 100 项：对话只见 browser_task(+_status)、常驻子 agent 接收后续任务、释放/重启后恢复并重新挂工具、状态与等待（结算、超时、用户发话、子 agent 来信、取消、静默退出）、fresh 与丢失替换、一次性委派、取消与回退
-node test/inspector.mjs   # 49 项：Web 端注册 + 配置表单的注册键/字段/写回 + host 路由 + 页面可渲染
+node test/inspector.mjs   # 63 项：Web 端注册 + 配置表单的注册键/字段/写回 + host 路由 + 页面可渲染
 node test/provision.mjs   # 93 项：14 uv 查找与失败诊断 + 24 安装（同时只跑一次、失败→修复、重试窗口、没有 uv、超时）+ 23 Python 路径（探测、venv、按哈希 pip、wheel、索引、回退）+ 21 经引擎检查的安装与报告 + 4 取消等待 + 7 doctor 工具与命令行（假 uv 与假 python，不下载）
 npm run release:check     # 核对 npm/Python/uv.lock 版本、发布元数据、随包引擎（wheel、清单、lock 哈希）与 vendor/requirements.txt 一致
 npm run release:pack      # 检查并独立安装实际 npm 包，让它自己构建引擎环境，输出到 dist/，不会发布

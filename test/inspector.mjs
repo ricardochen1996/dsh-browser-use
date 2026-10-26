@@ -40,6 +40,9 @@ const reactStub = () => ({
   createElement: (type, props, ...children) => ({ type, props, children }),
   useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}],
   useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(),
+  // The update control starts its first check from an effect; the browser owns that timing, and the
+  // checks below drive the store the effect would have started directly.
+  useEffect: () => {},
 })
 
 /**
@@ -54,6 +57,8 @@ const primitivesStub = () => ({
     children: [],
   }),
   Menu: props => ({ type: 'div', props, children: [props.anchor] }),
+  Button: props => ({ type: 'button', props, children: props.children ?? [] }),
+  IconRefreshOutlineRegular: props => ({ type: 'svg', props, children: [] }),
 })
 
 /**
@@ -246,6 +251,14 @@ async function checkSwitchForm() {
     'jev.typesafe.apiKey', 'jev.typesafe.baseURL', 'jev.typesafe.model',
   ].sort()), `the form offers the connection switches, the decider and TypeSafe, and nothing else (got ${pageFields.join(', ')})`)
 
+  // Every row puts its control in one fixed column: the label and the control share a line and the
+  // hint sits under the label, so a long explanation can never squeeze the switch (the bug this form
+  // used to show — a wrapped label inside a squeezed select).
+  const rowHosts = rowsOf(page.component({ view: 'page', form })).map(field => field.type(field.props))
+  check(rowHosts.every(host => Array.isArray(host.children)
+    && host.children.some(child => child?.props?.className === 'dsh-bu-control')),
+  'every row draws its control in its own column instead of letting a long hint squeeze it')
+
   // One switch, two answers: no way to turn Jev off, because who answers it is the only question.
   const decider = controlFor(page.component({ view: 'page', form }), 'jev.decider')
     .find(node => typeof node.props?.onSelect === 'function')
@@ -259,7 +272,7 @@ async function checkSwitchForm() {
 
   // The copy follows the shell's active language: the same registration, the same rows, read twice.
   const englishLabels = labelsOf(page.component({ view: 'page', form }))
-  check(JSON.stringify(englishLabels) === JSON.stringify(['Connection', 'Attach sharing', 'Decider', 'Jev URL', 'Jev Model', 'Jev API key']),
+  check(JSON.stringify(englishLabels) === JSON.stringify(['Connection', 'Sharing', 'Decider', 'Jev URL', 'Jev Model', 'Jev API key']),
     `the rows read English while English is active (got ${englishLabels.join(', ')})`)
   check(JSON.stringify(controlFor(page.component({ view: 'page', form }), 'jev.decider')
     .find(node => typeof node.props?.onSelect === 'function').props.items.map(item => item.label))
@@ -269,7 +282,7 @@ async function checkSwitchForm() {
     'the hint under the decider reads English too')
   locale.active = 'zh'
   const chineseLabels = labelsOf(page.component({ view: 'page', form }))
-  check(JSON.stringify(chineseLabels) === JSON.stringify(['连接方式', 'attach 共享', '决策者', 'Jev URL', 'Jev Model', 'Jev 密钥']),
+  check(JSON.stringify(chineseLabels) === JSON.stringify(['连接方式', '共享方式', '决策者', 'Jev URL', 'Jev Model', 'Jev 密钥']),
     `the same rows read Chinese once the active language changes (got ${chineseLabels.join(', ')})`)
   check(hintsOf(page.component({ view: 'page', form }))[0]?.startsWith('launch：插件自己启动'),
     'the hint follows the active language as well')
@@ -278,6 +291,17 @@ async function checkSwitchForm() {
   locale.active = 'en'
   check(labelsOf(card.component({ view: 'page' }))[0] === 'Connection',
     'the bundle page card, which renders outside the shell\u2019s `t` prop, reads the same dictionary')
+
+  // The actions row of the plugin's own page: the update control is a detail contribution, so it
+  // has to sort itself out from the page subject rather than assume the page is about this bundle.
+  const update = registrations.find(entry => entry.options?.name === 'plugins.detail.actions')
+  check(update?.options.id === 'dsh-browser-use/update' && update.options.locale === 'browserUse',
+    'the bundle page gets this plugin\u2019s own update control, with the renderer\u2019s translator seat')
+  check(update.component({ subject: { kind: 'bundle', pkg: { name: 'someone-else' } }, t: key => key }) === null,
+    'the update control draws nothing on another bundle\u2019s page')
+  check(update.component({
+    subject: { kind: 'bundle', pkg: { name: '@ricardochen1996/dsh-browser-use' } }, t: key => key,
+  })?.props?.className === 'dsh-bu-update', 'the update control draws on this bundle\u2019s page')
 
   // A text field commits on blur, not on every keystroke.
   const url = controlFor(page.component({ view: 'page', form }), 'jev.typesafe.baseURL').find(node => node.type === 'input')
@@ -339,8 +363,142 @@ async function checkSwitchForm() {
   check(sharingControl.find(node => node.type === 'button')?.props.disabled === true,
     'the sharing row still states its stored value, on a control that refuses the change')
   const sharingHints = hintsOf(rowFor(page.component({ view: 'page', form: launched }), 'attachSharing'))
-  check(sharingHints[0]?.startsWith('Only meaningful in attach mode'),
+  check(sharingHints[0]?.startsWith('Attach mode only'),
     'the sharing row says why it is locked instead of looking broken')
+}
+
+/**
+ * The update control's state machine, driven with a recording market: discovery, the check, the
+ * install request and the operation it polls. A Host without the market must leave the page alone.
+ */
+async function checkUpdateControl() {
+  const require = specifier => (specifier === 'react' ? reactStub() : primitivesStub())
+  globalThis.window = { __ModuleLoader__: { load: ({ factory }) => { globalThis.__loaded = { factory } } } }
+  await import(pathToFileURL(join(PACKAGE_ROOT, 'lib', 'client.js')).href)
+  const plugin = globalThis.__loaded.factory(require)
+  check(typeof plugin.marketUpdates === 'function',
+    'the client half exposes the update store its offline checks drive without a market')
+
+  const PACKAGE = '@ricardochen1996/dsh-browser-use'
+  const SCHEMA = 'dsh-market/update-api/v1'
+  const ENDPOINTS = { updates: '/dsh-market/api/v1/updates', operations: '/dsh-market/api/v1/operations' }
+  const reply = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body })
+  const capabilities = reply(200, { schema: SCHEMA, features: { check: true, update: true }, endpoints: ENDPOINTS })
+  const checked = (packageInfo) => reply(200, { schema: SCHEMA, package: packageInfo })
+  /** One market: the capabilities answer, then whatever the routes name says next. */
+  const market = (routes) => async (url, init = {}) => {
+    for (const [matches, answer] of routes) if (matches(url, init)) return answer()
+    throw new Error(`unexpected market request: ${init.method ?? 'GET'} ${url}`)
+  }
+  const isCapabilities = url => url === '/dsh-market/api/v1/capabilities'
+  const isCheck = url => url.startsWith('/dsh-market/api/v1/updates?')
+  const isStart = (_url, init) => init.method === 'POST'
+  const isPoll = url => url.startsWith('/dsh-market/api/v1/operations?')
+
+  // A newer release is offered under the name the page shows.
+  const calls = []
+  const available = plugin.marketUpdates({
+    fetch: market([
+      [isCapabilities, () => capabilities],
+      [isCheck, () => checked({ name: PACKAGE, source: 'npm', installedVersion: '0.8.0', latestVersion: '0.8.1', updateAvailable: true })],
+    ]),
+    wait: async () => {},
+  })
+  await available.ensureStarted()
+  const offered = available.getSnapshot()
+  check(offered.phase === 'available' && offered.latestVersion === '0.8.1',
+    `the check offers a newer published release (got ${offered.phase})`)
+
+  const recording = plugin.marketUpdates({
+    fetch: async (url, init = {}) => { calls.push({ url, init }); return url === '/dsh-market/api/v1/capabilities'
+      ? capabilities
+      : checked({ name: PACKAGE, source: 'npm', installedVersion: '0.8.0', latestVersion: '0.8.1', updateAvailable: true }) },
+    wait: async () => {},
+  })
+  await recording.ensureStarted()
+  check(calls[1]?.url === '/dsh-market/api/v1/updates?name=%40ricardochen1996%2Fdsh-browser-use',
+    'the check names this bundle and uses the endpoint discovered from capabilities')
+
+  // Up to date is its own answer: the page keeps the check control, not an install offer.
+  const current = plugin.marketUpdates({
+    fetch: market([
+      [isCapabilities, () => capabilities],
+      [isCheck, () => checked({ name: PACKAGE, source: 'npm', installedVersion: '0.8.1', latestVersion: '0.8.1', updateAvailable: false })],
+    ]),
+    wait: async () => {},
+  })
+  await current.ensureStarted()
+  check(current.getSnapshot().phase === 'current', 'an installed latest release reads as up to date')
+
+  // A cached market answer that names a different installed version than the page draws is stale;
+  // it is re-asked once with force, so a just-updated plugin cannot keep offering its old target.
+  let staleChecks = 0
+  const stale = plugin.marketUpdates({
+    fetch: async (url) => {
+      if (url === '/dsh-market/api/v1/capabilities') return capabilities
+      staleChecks += 1
+      return checked(url.includes('force=1')
+        ? { name: PACKAGE, source: 'npm', installedVersion: '0.8.0', latestVersion: '0.8.0', updateAvailable: false }
+        : { name: PACKAGE, source: 'npm', installedVersion: '0.7.0', latestVersion: '0.8.0', updateAvailable: true })
+    },
+    wait: async () => {},
+  })
+  await stale.ensureStarted('0.8.0')
+  check(staleChecks === 2 && stale.getSnapshot().phase === 'current',
+    'a cached answer naming another installed version is re-asked once, so the page cannot offer an already-installed update')
+
+  // The install: one POST, then the operation's progress and its outcome.
+  const requests = []
+  const accepted = reply(202, { schema: SCHEMA, operation: { operationId: 'boot-update-1', state: 'queued', progress: { percent: null } } })
+  const running = reply(200, { schema: SCHEMA, operation: { operationId: 'boot-update-1', state: 'running', progress: { percent: 40 } } })
+  const finished = reply(200, { schema: SCHEMA, operation: {
+    operationId: 'boot-update-1', state: 'succeeded', installedVersion: '0.8.1',
+    outcome: { refreshRequired: true, restartRequired: false },
+  } })
+  let polls = 0
+  const installing = plugin.marketUpdates({
+    fetch: async (url, init = {}) => {
+      requests.push({ url, init })
+      if (isCapabilities(url)) return capabilities
+      if (isStart(url, init)) return accepted
+      if (isPoll(url)) return polls++ === 0 ? running : finished
+      throw new Error(`unexpected market request: ${url}`)
+    },
+    wait: async () => {},
+  })
+  await installing.start()
+  const done = installing.getSnapshot()
+  check(done.phase === 'succeeded' && done.installedVersion === '0.8.1' && done.refreshRequired === true,
+    `the accepted update is followed to its installed release (got ${done.phase})`)
+  check(JSON.parse(requests.find(request => request.init.method === 'POST')?.init.body).packageName === PACKAGE,
+    'the install request names this bundle for the market')
+  check(JSON.parse(requests.find(request => request.init.method === 'POST')?.init.body).force === undefined,
+    'an ordinary update does not force past the release-age hold')
+
+  // A refusal keeps the market's own code, so the page can say an agent is in the way and be retried.
+  const refused = plugin.marketUpdates({
+    fetch: async (url, init = {}) => {
+      if (isCapabilities(url)) return capabilities
+      if (isStart(url, init)) return reply(409, {
+        schema: SCHEMA, error: 'an agent is running',
+        failure: { code: 'AGENTS_RUNNING', message: 'an agent is running', retryable: true },
+      })
+      throw new Error(`unexpected market request: ${url}`)
+    },
+    wait: async () => {},
+  })
+  await refused.start()
+  check(refused.getSnapshot().phase === 'failed' && refused.getSnapshot().failure?.code === 'AGENTS_RUNNING',
+    'a refused install keeps the market failure code for the retry the page offers')
+
+  // No market on this Host: the page keeps its own controls and the update control disappears.
+  const absent = plugin.marketUpdates({
+    fetch: async () => reply(404, { error: 'not found' }),
+    wait: async () => {},
+  })
+  await absent.ensureStarted()
+  check(absent.getSnapshot().phase === 'unavailable',
+    'a Host without the Market update routes shows no update control at all')
 }
 
 /** The host route as the shell reaches it: same handler, a real HTTP server. */
@@ -385,6 +543,7 @@ async function checkHostRoute() {
 
 await checkClientHalf()
 await checkSwitchForm()
+await checkUpdateControl()
 await checkHostRoute()
 if (!SERVE) {
   console.log(passed.join('\n'))
