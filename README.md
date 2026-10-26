@@ -444,7 +444,7 @@ uv run python test/check_bridge.py   # 10: sidecar end-to-end (stdio + real brow
 uv run python test/check_tabs.py     # 5: a launch leaves exactly one tab
 node test/plugin.mjs      # 131: 38 tools, refusals & guidance (real browser) + 3 element-state rendering + 4 missing-engine diagnostics + 29 engine config + 3 attach exclusivity + 9 attach sharing + 6 attach-to-your-Chrome + 17 attach preflight + 14 settings form & immediate effect + 5 sidecar environment + 3 in-flight cancel
 node test/delegation.mjs  # 100: conversation sees only browser_task(+_status), persistent subagent takes later tasks, restores & re-mounts tools after release/restart, status & wait (settle, timeout, user, subagent message, cancel, silent exit), fresh & lost replacement, one-shot delegation, cancel & fallback
-node test/inspector.mjs   # 63: web-half registration + config form registration keys/fields/write-back + host routing + page renders
+node test/inspector.mjs   # 65: web-half registration + config form registration keys/fields/write-back + host routing + page renders
 node test/provision.mjs   # 93: 14 uv lookup & failure diagnosis + 24 install (one at a time, failure → fix, retry window, no uv, timeout) + 23 the Python path (probe, venv, hash-pinned pip, wheel, index, fallbacks) + 21 install through the engine check & report + 4 cancelled wait + 7 doctor tool & CLI (fake uv and fake python, no download)
 npm run release:check     # npm/Python/uv.lock version, publishing metadata, bundled engine (wheel, manifest, lock hashes) and vendor/requirements.txt agreement
 npm run release:pack      # inspect and install the exact npm tarball, then let it build its own engine environment; writes dist/ (no publishing)

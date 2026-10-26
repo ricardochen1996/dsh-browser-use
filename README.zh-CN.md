@@ -446,7 +446,7 @@ uv run python test/check_bridge.py   # 10 项：sidecar 端到端（stdio + 真�
 uv run python test/check_tabs.py     # 5 项：一次启动只留一个标签页
 node test/plugin.mjs      # 131 项：38 工具、拒绝与提示词规则（真浏览器）+ 3 元素状态渲染 + 4 缺引擎诊断 + 29 引擎配置 + 3 attach 独占 + 9 attach 共享 + 6 接你的 Chrome + 17 attach 预检 + 14 设置页表单与即时生效 + 5 sidecar 环境 + 3 在途取消
 node test/delegation.mjs  # 100 项：对话只见 browser_task(+_status)、常驻子 agent 接收后续任务、释放/重启后恢复并重新挂工具、状态与等待（结算、超时、用户发话、子 agent 来信、取消、静默退出）、fresh 与丢失替换、一次性委派、取消与回退
-node test/inspector.mjs   # 63 项：Web 端注册 + 配置表单的注册键/字段/写回 + host 路由 + 页面可渲染
+node test/inspector.mjs   # 65 项：Web 端注册 + 配置表单的注册键/字段/写回 + host 路由 + 页面可渲染
 node test/provision.mjs   # 93 项：14 uv 查找与失败诊断 + 24 安装（同时只跑一次、失败→修复、重试窗口、没有 uv、超时）+ 23 Python 路径（探测、venv、按哈希 pip、wheel、索引、回退）+ 21 经引擎检查的安装与报告 + 4 取消等待 + 7 doctor 工具与命令行（假 uv 与假 python，不下载）
 npm run release:check     # 核对 npm/Python/uv.lock 版本、发布元数据、随包引擎（wheel、清单、lock 哈希）与 vendor/requirements.txt 一致
 npm run release:pack      # 检查并独立安装实际 npm 包，让它自己构建引擎环境，输出到 dist/，不会发布

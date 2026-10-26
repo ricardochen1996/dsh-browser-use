@@ -409,6 +409,19 @@ async function checkUpdateControl() {
   check(offered.phase === 'available' && offered.latestVersion === '0.8.1',
     `the check offers a newer published release (got ${offered.phase})`)
 
+  // The desktop Market withholds a release younger than a day: updateAvailable is false while
+  // latestVersion names the newer release, and the page must offer it rather than say up to date.
+  const withheld = plugin.marketUpdates({
+    fetch: market([
+      [isCapabilities, () => capabilities],
+      [isCheck, () => checked({ name: PACKAGE, source: 'npm', installedVersion: '0.8.0', latestVersion: '0.8.1', updateAvailable: false })],
+    ]),
+    wait: async () => {},
+  })
+  await withheld.ensureStarted('0.8.0')
+  check(withheld.getSnapshot().phase === 'withheld' && withheld.getSnapshot().latestVersion === '0.8.1',
+    `a newer release the Market withholds is still offered (got ${withheld.getSnapshot().phase})`)
+
   const recording = plugin.marketUpdates({
     fetch: async (url, init = {}) => { calls.push({ url, init }); return url === '/dsh-market/api/v1/capabilities'
       ? capabilities
@@ -490,6 +503,24 @@ async function checkUpdateControl() {
   await refused.start()
   check(refused.getSnapshot().phase === 'failed' && refused.getSnapshot().failure?.code === 'AGENTS_RUNNING',
     'a refused install keeps the market failure code for the retry the page offers')
+
+  // A held-back release comes back as RELEASE_TOO_FRESH once it is attempted; the code survives so
+  // the page can offer the Force update retry the Market documents for exactly this case.
+  const tooFresh = plugin.marketUpdates({
+    fetch: async (url, init = {}) => {
+      if (isCapabilities(url)) return capabilities
+      if (isStart(url, init)) return accepted
+      if (isPoll(url)) return reply(200, { schema: SCHEMA, operation: {
+        operationId: 'boot-update-1', state: 'failed',
+        failure: { code: 'RELEASE_TOO_FRESH', message: 'the release is under a day old', retryable: true },
+      } })
+      throw new Error(`unexpected market request: ${url}`)
+    },
+    wait: async () => {},
+  })
+  await tooFresh.start()
+  check(tooFresh.getSnapshot().failure?.code === 'RELEASE_TOO_FRESH',
+    'a release-age refusal keeps the code the Force update retry acts on')
 
   // No market on this Host: the page keeps its own controls and the update control disappears.
   const absent = plugin.marketUpdates({
