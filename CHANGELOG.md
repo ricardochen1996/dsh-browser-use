@@ -6,11 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 Versions before 0.6.2 were reconstructed from this repository's git history (there was no changelog before 0.6.2): each entry names the commits it was derived from, and every release date is the date of its tagged commit. 0.6.2 is the first release written down as it was made.
 
-## [Unreleased]
+## [0.8.2] - 2026-10-26
 
 ### Fixed
 
 - The plugin page no longer calls itself up to date over a release the Market is holding back. The Market's desktop host withholds a release younger than a day (24 hours by default) and answers with `updateAvailable: false` while still naming the newer `latestVersion`; the page treated that as current and its check tooltip claimed there was no update — which is what a person saw after 0.8.1 was published. It now offers the newer version anyway, so the attempt either installs it or comes back as `RELEASE_TOO_FRESH` with the actionable explanation and a **Force update** retry, the bypass the Market documents in `UPDATE-API-V1`. `lib/client.js`; 2 new offline checks in `test/inspector.mjs`, taking the file to 65.
+
+_Commits: `8fa0859` (the withheld-release offer and its force retry), and this release commit._
 
 ## [0.8.1] - 2026-10-26
 
