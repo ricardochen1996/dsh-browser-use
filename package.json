@@ -65,10 +65,10 @@
   },
   "scripts": {
     "doctor": "node bin/doctor.mjs",
-    "test": "node test/plugin.mjs && node test/delegation.mjs && node test/inspector.mjs && node test/provision.mjs && node test/progress.mjs",
+    "test": "node test/deadline.mjs && node test/plugin.mjs && node test/delegation.mjs && node test/inspector.mjs && node test/provision.mjs && node test/progress.mjs",
     "test:python": "uv run pytest",
     "test:e2e": "uv run python test/check_bridge.py && uv run python test/check_tabs.py",
-    "check": "uv run ruff check . && uv run pytest -q && npm run release:check && node test/plugin.mjs && node test/delegation.mjs && node test/inspector.mjs && node test/provision.mjs && node test/progress.mjs",
+    "check": "uv run ruff check . && uv run pytest -q && npm run release:check && node test/deadline.mjs && node test/plugin.mjs && node test/delegation.mjs && node test/inspector.mjs && node test/provision.mjs && node test/progress.mjs",
     "release:check": "uv run python bin/check_release.py",
     "release:pack": "npm run release:check && node bin/check-package.mjs"
   },
