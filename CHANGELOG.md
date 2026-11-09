@@ -8,17 +8,17 @@ Versions before 0.6.2 were reconstructed from this repository's git history (the
 
 ## [Unreleased]
 
+### Added
+
+- `test/deadline.mjs` drives the real `Sidecar.request` against a stub engine: seven offline checks that an unbounded deadline waits for the answer instead of firing on the next tick, that an ordinary deadline keeps its own duration, and that the caller's cancellation and the sidecar exiting each settle a pending request. The stub speaks the sidecar's line JSON from a temporary directory — no browser, no engine and no model calls. It fails against the unfixed tree, where the goal request rejects in 1–2 ms. Wired into `npm test` and `npm run check`.
+
 ### Changed
 
 - A decision now names the model that answered it: `browser_act`'s intent result reads `Jev chose (jev-1.14.0) CLICK on [28] Close (confidence 1.00)` instead of `Jev chose CLICK on [28] Close (confidence 1.00)`. The sidecar has always returned `decision.model` alongside the operation, target and confidence, and `lib/tools.js` dropped it, so `jev.decider: typesafe` (a Jev/System One model) and `jev.decider: chat` (the text model) produced byte-identical transcripts and neither a person nor an agent could tell from the conversation which one had decided. The annotation is omitted when the engine reports no model, so an older engine reads as it did before.
 
 ### Fixed
 
-- `browser_goal` works again: it failed on every run, returning `goal did not answer within 9007199254740991ms` after a few milliseconds. The tool asks `lib/sidecar.js` for an unbounded deadline (`Number.MAX_SAFE_INTEGER`, since a goal run has no fixed budget), and Node keeps a timer delay in a 32-bit signed integer, silently shortening anything larger to 1 ms (`TimeoutOverflowWarning: … Timeout duration was set to 1`) — so the "never" deadline fired on the next tick and the request was rejected before the engine answered. `Sidecar.request` now clamps the deadline with `Math.min(timeoutMs, TIMER_MAX_MS)`, `TIMER_MAX_MS` being 2^31-1; a deadline meant to be unreachable stays unreachable, and the request still settles on the answer, the caller's signal, or the sidecar exiting. `lib/progress.js` already clamped its coalescing window for the same reason.
-
-### Added
-
-- `test/deadline.mjs`: 8 offline checks for the request deadline — the clamp constant, the runtime overflow it corrects (stated as a property of Node rather than of this code, so a release that fixed it would fail here and say the clamp is no longer load-bearing), that a clamped deadline does not fire, that an ordinary deadline keeps its duration, that cancellation still settles a request, and that neither `sidecar.js` nor its timer is handed `Number.MAX_SAFE_INTEGER`. Wired into `npm test` and `npm run check`. It fails on the tree before the fix and passes after it. No browser, no engine and no model calls.
+- `browser_goal` works again: it failed on every run, returning `goal did not answer within 9007199254740991ms` after a few milliseconds. The tool asks `lib/sidecar.js` for an unbounded deadline (`Number.MAX_SAFE_INTEGER`, since a goal run has no fixed budget), and Node keeps a timer delay in a 32-bit signed integer and shortens anything larger to 1 ms, reporting a `TimeoutOverflowWarning` (`… does not fit into a 32-bit signed integer. Timeout duration was set to 1.`) — so the "never" deadline fired on the next tick and the request was rejected before the engine answered. `Sidecar.request` now clamps the deadline with `Math.min(timeoutMs, TIMER_MAX_MS)`, `TIMER_MAX_MS` being 2^31-1; a deadline meant to be unreachable stays effectively out of reach, and the request still settles on the answer, the caller's signal, or the sidecar exiting. `lib/progress.js` already clamped its coalescing window for the same reason.
 
 ## [0.8.2] - 2026-10-26
 
