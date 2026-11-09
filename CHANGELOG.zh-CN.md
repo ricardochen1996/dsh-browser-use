@@ -6,7 +6,11 @@
 
 0.6.2 之前的版本是从本仓库的 git 历史重建出来的（0.6.2 之前没有版本说明）：每条记录都写明它取自哪些 commit，每个发布日期就是它那个打了标签的 commit 的日期。0.6.2 是第一个边做边写下来的版本。
 
-## [未发布]
+## [Unreleased]
+
+### 新增
+
+- `test/deadline.mjs` 现在用 stub sidecar 直接驱动真实的 `Sidecar.request`，共 7 项离线检查：无上限的期限会等引擎作答，而不是在下一个 tick 就触发；普通期限仍按自己的时长触发；调用方取消与 sidecar 退出都会结算挂起的请求。stub 在临时目录里说 sidecar 的行 JSON——不启动浏览器、不装引擎、不调用模型。它在未修复的树上是失败的：goal 请求在 1–2 ms 内就被拒绝。已接入 `npm test` 与 `npm run check`。
 
 ### 变更
 
@@ -14,11 +18,7 @@
 
 ### 修复
 
-- `browser_goal` 恢复可用：此前每次运行都失败，在几毫秒内返回 `goal did not answer within 9007199254740991ms`。该工具向 `lib/sidecar.js` 要一个无上限的期限（`Number.MAX_SAFE_INTEGER`，因为一次 goal 运行没有固定预算），而 Node 内部用 32 位有符号整数保存定时器延时，超过范围的值会被静默缩短为 1 毫秒（`TimeoutOverflowWarning: … Timeout duration was set to 1`）——于是这个「永不」触发的期限在下一个 tick 就触发，请求在引擎作答之前就被拒了。`Sidecar.request` 现在用 `Math.min(timeoutMs, TIMER_MAX_MS)` 夹住期限，`TIMER_MAX_MS` 为 2^31-1；本该够不到的期限仍然够不到，而请求照旧在收到回答、调用方取消、或 sidecar 退出时结束。`lib/progress.js` 早就出于同样的原因夹住了自己的合并窗口。
-
-### 新增
-
-- `test/deadline.mjs`：8 项离线检查，覆盖请求期限——夹取常数、它所修正的运行时溢出（作为 Node 的性质而不是本代码的性质来断言，这样一旦 Node 修复了它，这里就会失败并说明夹取已不再是必需的）、被夹住的期限确实不会触发、普通期限保持自己的时长、取消仍能结束一个请求，以及 `sidecar.js` 和它的定时器都不会拿到 `Number.MAX_SAFE_INTEGER`。已接入 `npm test` 与 `npm run check`。它在修复前的树上失败、修复后通过。不启动浏览器、不装引擎、不调用任何模型。
+- `browser_goal` 恢复可用：此前每次运行都失败，在几毫秒内返回 `goal did not answer within 9007199254740991ms`。该工具向 `lib/sidecar.js` 要一个无上限的期限（`Number.MAX_SAFE_INTEGER`，因为一次 goal 运行没有固定预算），而 Node 内部用 32 位有符号整数保存定时器延时，超过范围的值会被缩短为 1 毫秒，并打印 `TimeoutOverflowWarning`（`… does not fit into a 32-bit signed integer. Timeout duration was set to 1.`）——于是这个「永不」触发的期限在下一个 tick 就触发，请求在引擎作答之前就被拒了。`Sidecar.request` 现在用 `Math.min(timeoutMs, TIMER_MAX_MS)` 夹住期限，`TIMER_MAX_MS` 为 2^31-1；本该够不到的期限仍然实质上够不到，而请求照旧在收到回答、调用方取消、或 sidecar 退出时结束。`lib/progress.js` 早就出于同样的原因夹住了自己的合并窗口。
 
 ## [0.8.2] - 2026-10-26
 
