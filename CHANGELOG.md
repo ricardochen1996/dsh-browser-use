@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 Versions before 0.6.2 were reconstructed from this repository's git history (there was no changelog before 0.6.2): each entry names the commits it was derived from, and every release date is the date of its tagged commit. 0.6.2 is the first release written down as it was made.
 
-## [Unreleased]
+## [0.8.3] - 2026-11-09
 
 ### Added
 
@@ -19,6 +19,8 @@ Versions before 0.6.2 were reconstructed from this repository's git history (the
 ### Fixed
 
 - `browser_goal` works again: it failed on every run, returning `goal did not answer within 9007199254740991ms` after a few milliseconds. The tool asks `lib/sidecar.js` for an unbounded deadline (`Number.MAX_SAFE_INTEGER`, since a goal run has no fixed budget), and Node keeps a timer delay in a 32-bit signed integer and shortens anything larger to 1 ms, reporting a `TimeoutOverflowWarning` (`… does not fit into a 32-bit signed integer. Timeout duration was set to 1.`) — so the "never" deadline fired on the next tick and the request was rejected before the engine answered. `Sidecar.request` now clamps the deadline with `Math.min(timeoutMs, TIMER_MAX_MS)`, `TIMER_MAX_MS` being 2^31-1; a deadline meant to be unreachable stays effectively out of reach, and the request still settles on the answer, the caller's signal, or the sidecar exiting. `lib/progress.js` already clamped its coalescing window for the same reason.
+
+_Commits: `b22c48a` (the deadline clamp), `417eb1a` (the decision model in the transcript), `a144c9d` (the request-level deadline checks), `454f493` (the overflow comment), `83fb52b` (the changelog corrections), and this release commit._
 
 ## [0.8.2] - 2026-10-26
 

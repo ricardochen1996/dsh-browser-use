@@ -6,7 +6,7 @@
 
 0.6.2 之前的版本是从本仓库的 git 历史重建出来的（0.6.2 之前没有版本说明）：每条记录都写明它取自哪些 commit，每个发布日期就是它那个打了标签的 commit 的日期。0.6.2 是第一个边做边写下来的版本。
 
-## [Unreleased]
+## [0.8.3] - 2026-11-09
 
 ### 新增
 
@@ -19,6 +19,8 @@
 ### 修复
 
 - `browser_goal` 恢复可用：此前每次运行都失败，在几毫秒内返回 `goal did not answer within 9007199254740991ms`。该工具向 `lib/sidecar.js` 要一个无上限的期限（`Number.MAX_SAFE_INTEGER`，因为一次 goal 运行没有固定预算），而 Node 内部用 32 位有符号整数保存定时器延时，超过范围的值会被缩短为 1 毫秒，并打印 `TimeoutOverflowWarning`（`… does not fit into a 32-bit signed integer. Timeout duration was set to 1.`）——于是这个「永不」触发的期限在下一个 tick 就触发，请求在引擎作答之前就被拒了。`Sidecar.request` 现在用 `Math.min(timeoutMs, TIMER_MAX_MS)` 夹住期限，`TIMER_MAX_MS` 为 2^31-1；本该够不到的期限仍然实质上够不到，而请求照旧在收到回答、调用方取消、或 sidecar 退出时结束。`lib/progress.js` 早就出于同样的原因夹住了自己的合并窗口。
+
+_Commits: `b22c48a`（期限夹取）、`417eb1a`（对话里的决策模型）、`a144c9d`（走真实请求路径的期限检查）、`454f493`（溢出提示的注释）、`83fb52b`（版本说明修正），以及本次发版提交。_
 
 ## [0.8.2] - 2026-10-26
 
